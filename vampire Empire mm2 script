@@ -1,0 +1,1439 @@
+--[[
+    Ultra MM2 GUI | Gelişmiş ESP, Chams, Tracers ve Optimizasyonlar (V22.0 - Anti-Fling ve Fling Sistemi)
+    Eğitim ve test amaçlıdır!
+    
+    V22.0 Yenilikleri:
+    🛡️ [YENİ] Anti-Fling sistemi eklendi (Fling saldırılarından korunma).
+    💥 [YENİ] İsimle Fling yapma özelliği eklendi (Belirtilen oyuncuyu fling yapma).
+    🎯 [YENİ] Gelişmiş hedefleme sistemi ve daha akıllı ESP.
+    🔧 [İYİLEŞTİRME] Performans optimizasyonları ve kod temizliği.
+    🎨 [İYİLEŞTİRME] GUI tasarımı ve kullanıcı deneyimi geliştirildi.
+    💾 [İYİLEŞTİRME] Ayar sistemi genişletildi ve daha stabil hale getirildi.
+    🏃 [YENİ] Hareket Özellikleri (Hız, Sonsuz Zıplama, Noclip, Anti-Ragdoll)
+--]]
+
+-- Oyun Kimliği Kontrolü
+if game.PlaceId ~= 142823291 then
+    warn("Bu script sadece Murder Mystery 2'de (MM2) çalışır."); return
+end
+
+-- Oyunun Yüklenmesini Bekle
+if not game:IsLoaded() then game.Loaded:Wait() end
+
+-- === Servisler ===
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local Stats = game:GetService("Stats")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local VirtualUser = game:GetService("VirtualUser")
+
+local localPlayer = Players.LocalPlayer
+local camera = Workspace.CurrentCamera
+
+-- === Yapılandırılabilir Ayarlar ===
+local Config = {
+    Prediction = {
+        MinTime = 0.05,
+        PingMultiplier = 1.2,
+        VelocityMultiplier = 0.04,
+        AimOffsetY = 0.7
+    },
+    Combat = {
+        KillAuraRange = 12,
+        AutoKnifeThrowRange = 25,
+        ManualShootDelay = 0.5
+    },
+    ESP = {
+        BoxTransparency = 0.3,
+        NametagFontSize = 14,
+        DistanceFontSize = 12,
+        HealthBarEnabled = true,
+        WeaponDisplayEnabled = true,
+        PingDisplayEnabled = true,
+        UpdateRate = 0.1,
+        ChamsTransparency = 0.4,
+        TracerThickness = 1.5
+    },
+    Crosshair = {
+        Enabled = false,
+        Type = "Dot",
+        Color = Color3.fromRGB(255, 255, 255),
+        Size = 5,
+        Thickness = 1,
+        AimColor = Color3.fromRGB(255, 0, 0)
+    },
+    Fling = {
+        AntiVelocityThreshold = 100,
+        FlingForce = Vector3.new(0, 200, 0),
+        FlingDirection = 50
+    }
+}
+
+-- RemoteEvent isimleri
+local POSSIBLE_REMOTE_EVENT_NAMES = {"RemoteEvent", "FireGun", "BulletEvent", "GunFire", "WeaponEvent", "MM2Event", "Shoot", "Fire", "Throw"}
+local POSSIBLE_PICKUP_REMOTE_NAMES = {"PickupItem", "Collect", "ItemCollect", "GrabItem", "GiveItem", "ServerRemote"}
+
+-- === Teleport Noktaları ===
+local TELEPORT_LOCATIONS = {
+    ["Lobi"] = Vector3.new(0, 5, 0),
+    ["Silah Spawn 1"] = Vector3.new(20, 5, 10),
+    ["Bıçak Spawn 1"] = Vector3.new(-15, 5, -20),
+    ["Ortadaki Alan"] = Vector3.new(0, 10, 0),
+    ["Çatı"] = Vector3.new(0, 50, 0),
+}
+
+-- === Değişkenler ===
+local state = {
+    speedValue = 250,
+    jumpPowerValue = 50,
+    espActive = false,
+    chamsActive = false,
+    tracersActive = false,
+    speedActive = false,
+    gunESPActive = false,
+    killAuraActive = false,
+    autoTPActive = false,
+    autoCoinActive = false,
+    antiAFKActive = false,
+    finderActive = false,
+    infJumpActive = false,
+    noclipActive = false,
+    autoShootActive = false,
+    distanceESPActive = false,
+    autoKnifeThrowActive = false,
+    antiRagdollActive = false,
+    customTeleportLocations = {},
+    crosshairActive = false,
+    antiFlingActive = false,
+    flingPlayerName = "",
+    flingActive = false,
+}
+
+-- ESP Tabloları
+local espData = {}
+local itemESPIcons = {}
+local lastESPUpdate = 0
+
+-- Coroutine'ler ve Bağlantılar
+local killAuraCoroutine, itemCollectorCoroutine, autoShootCoroutine, autoKnifeThrowCoroutine = nil, nil, nil, nil
+local afkConnection, infJumpConnection, noclipConnection, antiRagdollConnection = nil, nil, nil, nil
+local antiFlingConnection, flingConnection = nil, nil
+
+-- GUI Elemanları
+local mainFrame, finderFrame, fpsLabel, statsLabel, crosshairFrame = nil, nil, nil, nil, nil
+local screenGui, espScreenGui
+local flingPlayerTextBox = nil
+
+-- Cache'ler
+local cachedShootRemote = {remote = nil}
+local cachedPickupRemote = {remote = nil}
+
+-- İstatistikler
+local currentKills = 0
+local currentCoins = 0
+local lastRole = "Innocent"
+
+-- Keybinds
+local keybinds = {
+    ["toggle_gui"] = Enum.KeyCode.F4,
+    ["manual_shoot"] = Enum.KeyCode.F5,
+    ["kill_all"] = Enum.KeyCode.F6,
+    ["toggle_esp"] = Enum.KeyCode.F7,
+    ["toggle_crosshair"] = Enum.KeyCode.F8,
+    ["toggle_anti_fling"] = Enum.KeyCode.F9,
+}
+
+-- Performans için cache'lenmiş fonksiyonlar
+local pcall = pcall
+local ipairs = ipairs
+local pairs = pairs
+local math_floor = math.floor
+local math_random = math.random
+local math_clamp = math.clamp
+local string_format = string.format
+local table_insert = table.insert
+local table_sort = table.sort
+local warn = warn
+local task_wait = task.wait
+
+-- === Yardımcı Fonksiyonlar ===
+local function getRole(plr)
+    if not plr or not plr.Character then return "Innocent" end
+    if plr.Character:FindFirstChild("Gun", true) or plr.Backpack:FindFirstChild("Gun") then
+        return "Sheriff"
+    elseif plr.Character:FindFirstChild("Knife", true) or plr.Backpack:FindFirstChild("Knife") then
+        return "Murderer"
+    end
+    return "Innocent"
+end
+
+local function getRoleColor(role)
+    if role == "Murderer" then return Color3.fromRGB(255, 60, 60)
+    elseif role == "Sheriff" then return Color3.fromRGB(80, 180, 255)
+    elseif role == "Hero" then return Color3.fromRGB(0, 255, 0)
+    else return Color3.fromRGB(220, 220, 220) end
+end
+
+local function getRoleEmoji(role)
+    if role == "Murderer" then return "🔪"
+    elseif role == "Sheriff" then return "🔫"
+    elseif role == "Hero" then return "⭐"
+    else return "🙂" end
+end
+
+local function getHumanoidRootPart(character)
+    if not character then return nil end
+    return character:FindFirstChild("HumanoidRootPart")
+end
+
+local function getDistance(pos1, pos2)
+    return math_floor((pos1 - pos2).Magnitude)
+end
+
+local function findRemoteEvent(possibleNames, cacheTable, storage)
+    if cacheTable.remote and cacheTable.remote.Parent then
+        return cacheTable.remote
+    end
+
+    local searchLocations = {ReplicatedStorage, Workspace, Players, game:GetService("Lighting"), game:GetService("SoundService"), game:GetService("ProximityPromptService")}
+
+    for _, eventName in ipairs(possibleNames) do
+        for _, loc in ipairs(searchLocations) do
+            local remoteEvent = loc:FindFirstChild(eventName, true)
+            if remoteEvent and remoteEvent:IsA("RemoteEvent") then
+                cacheTable.remote = remoteEvent
+                warn("RemoteEvent bulundu: " .. eventName .. " konumunda: " .. loc.Name)
+                return remoteEvent
+            end
+        end
+        -- Fallback: Search through all descendants if not found in common locations
+        local foundInDescendants = game:FindFirstChild(eventName, true)
+        if foundInDescendants and foundInDescendants:IsA("RemoteEvent") then
+            cacheTable.remote = foundInDescendants
+            warn("RemoteEvent bulundu (genel arama): " .. eventName .. " konumunda: " .. foundInDescendants.Parent.Name)
+            return foundInDescendants
+        end
+    end
+    warn("RemoteEvent bulunamadı. Denenen isimler: " .. table.concat(possibleNames, ", "))
+    return nil
+end
+
+-- === Ayarlar Sistemi ===
+local function loadSettings()
+    state.speedValue = localPlayer:GetAttribute("MM2_SpeedValue") or 250
+    state.jumpPowerValue = localPlayer:GetAttribute("MM2_JumpPowerValue") or 50
+    state.espActive = localPlayer:GetAttribute("MM2_ESPActive") or false
+    state.chamsActive = localPlayer:GetAttribute("MM2_ChamsActive") or false
+    state.tracersActive = localPlayer:GetAttribute("MM2_TracersActive") or false
+    state.distanceESPActive = localPlayer:GetAttribute("MM2_DistanceESPActive") or false
+    state.crosshairActive = localPlayer:GetAttribute("MM2_CrosshairActive") or false
+    state.antiFlingActive = localPlayer:GetAttribute("MM2_AntiFlingActive") or false
+    state.flingPlayerName = localPlayer:GetAttribute("MM2_FlingPlayerName") or ""
+    state.flingActive = localPlayer:GetAttribute("MM2_FlingActive") or false
+    
+    -- Hareket özellikleri ayarları
+    state.speedActive = localPlayer:GetAttribute("MM2_SpeedActive") or false
+    state.infJumpActive = localPlayer:GetAttribute("MM2_InfJumpActive") or false
+    state.noclipActive = localPlayer:GetAttribute("MM2_NoclipActive") or false
+    state.antiRagdollActive = localPlayer:GetAttribute("MM2_AntiRagdollActive") or false
+
+    -- Config değerlerini yükle
+    Config.ESP.BoxTransparency = localPlayer:GetAttribute("MM2_ESPBoxTransparency") or 0.3
+    Config.ESP.NametagFontSize = localPlayer:GetAttribute("MM2_ESPNametagSize") or 14
+    Config.ESP.DistanceFontSize = localPlayer:GetAttribute("MM2_ESPDistanceSize") or 12
+    Config.ESP.HealthBarEnabled = localPlayer:GetAttribute("MM2_ESPHealthBar") or true
+    Config.ESP.WeaponDisplayEnabled = localPlayer:GetAttribute("MM2_ESPWeaponDisplay") or true
+    Config.ESP.PingDisplayEnabled = localPlayer:GetAttribute("MM2_ESPPingDisplay") or true
+    
+    Config.Crosshair.Type = localPlayer:GetAttribute("MM2_CrosshairType") or "Dot"
+    Config.Crosshair.Color = localPlayer:GetAttribute("MM2_CrosshairColor") or Color3.fromRGB(255, 255, 255)
+    Config.Crosshair.Size = localPlayer:GetAttribute("MM2_CrosshairSize") or 5
+    Config.Crosshair.Thickness = localPlayer:GetAttribute("MM2_CrosshairThickness") or 1
+    Config.Crosshair.AimColor = localPlayer:GetAttribute("MM2_CrosshairAimColor") or Color3.fromRGB(255, 0, 0)
+    
+    state.customTeleportLocations = localPlayer:GetAttribute("MM2_CustomTPLocs") or {}
+    
+    local loadedKeybinds = localPlayer:GetAttribute("MM2_Keybinds")
+    if loadedKeybinds then
+        for k, v in pairs(loadedKeybinds) do
+            keybinds[k] = Enum.KeyCode[v] or keybinds[k]
+        end
+    end
+end
+
+local function saveSettings()
+    localPlayer:SetAttribute("MM2_SpeedValue", state.speedValue)
+    localPlayer:SetAttribute("MM2_JumpPowerValue", state.jumpPowerValue)
+    localPlayer:SetAttribute("MM2_ESPActive", state.espActive)
+    localPlayer:SetAttribute("MM2_ChamsActive", state.chamsActive)
+    localPlayer:SetAttribute("MM2_TracersActive", state.tracersActive)
+    localPlayer:SetAttribute("MM2_DistanceESPActive", state.distanceESPActive)
+    localPlayer:SetAttribute("MM2_CrosshairActive", state.crosshairActive)
+    localPlayer:SetAttribute("MM2_AntiFlingActive", state.antiFlingActive)
+    localPlayer:SetAttribute("MM2_FlingPlayerName", state.flingPlayerName)
+    localPlayer:SetAttribute("MM2_FlingActive", state.flingActive)
+    
+    -- Hareket özellikleri ayarlarını kaydet
+    localPlayer:SetAttribute("MM2_SpeedActive", state.speedActive)
+    localPlayer:SetAttribute("MM2_InfJumpActive", state.infJumpActive)
+    localPlayer:SetAttribute("MM2_NoclipActive", state.noclipActive)
+    localPlayer:SetAttribute("MM2_AntiRagdollActive", state.antiRagdollActive)
+
+    localPlayer:SetAttribute("MM2_ESPBoxTransparency", Config.ESP.BoxTransparency)
+    localPlayer:SetAttribute("MM2_ESPNametagSize", Config.ESP.NametagFontSize)
+    localPlayer:SetAttribute("MM2_ESPDistanceSize", Config.ESP.DistanceFontSize)
+    localPlayer:SetAttribute("MM2_ESPHealthBar", Config.ESP.HealthBarEnabled)
+    localPlayer:SetAttribute("MM2_ESPWeaponDisplay", Config.ESP.WeaponDisplayEnabled)
+    localPlayer:SetAttribute("MM2_ESPPingDisplay", Config.ESP.PingDisplayEnabled)
+    
+    localPlayer:SetAttribute("MM2_CrosshairType", Config.Crosshair.Type)
+    localPlayer:SetAttribute("MM2_CrosshairColor", Config.Crosshair.Color)
+    localPlayer:SetAttribute("MM2_CrosshairSize", Config.Crosshair.Size)
+    localPlayer:SetAttribute("MM2_CrosshairThickness", Config.Crosshair.Thickness)
+    localPlayer:SetAttribute("MM2_CrosshairAimColor", Config.Crosshair.AimColor)
+    
+    localPlayer:SetAttribute("MM2_CustomTPLocs", state.customTeleportLocations)
+    
+    local serializableKeybinds = {}
+    for k, v in pairs(keybinds) do
+        serializableKeybinds[k] = v.Name
+    end
+    localPlayer:SetAttribute("MM2_Keybinds", serializableKeybinds)
+end
+
+-- === İstatistik Sistemi ===
+local function updateStats()
+    local currentRole = getRole(localPlayer)
+    if currentRole ~= lastRole then
+        lastRole = currentRole
+        currentKills = 0
+        currentCoins = 0
+    end
+
+    local statsText = string_format("Rol: %s | Öldürme: %d | Coin: %d", 
+                                    currentRole, currentKills, currentCoins)
+    if statsLabel then
+        statsLabel.Text = statsText
+    end
+end
+
+-- === Anti-Fling ve Fling Sistemi ===
+local function antiFling()
+    if not state.antiFlingActive then return end
+    local hrp = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if hrp then
+        -- Velocity kontrolü
+        local velocity = hrp.Velocity or hrp.AssemblyLinearVelocity
+        if velocity and velocity.Magnitude > Config.Fling.AntiVelocityThreshold then
+            -- Yeni API'yi dene
+            if hrp.AssemblyLinearVelocity then
+                hrp.AssemblyLinearVelocity = Vector3.new(0,0,0)
+                hrp.AssemblyAngularVelocity = Vector3.new(0,0,0)
+            else
+                -- Eski API'yi dene
+                hrp.Velocity = Vector3.new(0,0,0)
+                hrp.RotVelocity = Vector3.new(0,0,0)
+            end
+        end
+    end
+end
+
+local function flingPlayerByName()
+    if not state.flingActive or state.flingPlayerName == "" then return end
+    local targetPlayer = Players:FindFirstChild(state.flingPlayerName)
+    if targetPlayer and targetPlayer.Character then
+        local targetHRP = targetPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if targetHRP then
+            local direction = (targetHRP.CFrame.LookVector * Config.Fling.FlingDirection)
+            -- Yeni API'yi dene
+            if targetHRP.AssemblyLinearVelocity then
+                targetHRP.AssemblyLinearVelocity = Config.Fling.FlingForce + direction
+            else
+                -- Eski API'yi dene
+                targetHRP.Velocity = Config.Fling.FlingForce + direction
+            end
+        end
+    end
+end
+
+-- === Hareket Fonksiyonları ===
+local function setSpeed(enabled)
+    if not localPlayer.Character or not localPlayer.Character:FindFirstChildOfClass("Humanoid") then return end
+    local humanoid = localPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if enabled then
+        humanoid.WalkSpeed = state.speedValue
+    else
+        humanoid.WalkSpeed = 16
+    end
+end
+
+local function toggleInfJump(enabled)
+    if infJumpConnection then
+        infJumpConnection:Disconnect()
+        infJumpConnection = nil
+    end
+
+    if enabled then
+        infJumpConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+            if gameProcessed then return end
+            if input.KeyCode == Enum.KeyCode.Space then
+                local character = localPlayer.Character
+                local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+                if humanoid then
+                    humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+                end
+            end
+        end)
+    end
+end
+
+local noclipBodyVelocity = nil
+local function toggleNoclip(enabled)
+    local char = localPlayer.Character
+    if not char then return end
+
+    if noclipConnection then
+        noclipConnection:Disconnect()
+        noclipConnection = nil
+    end
+    
+    if noclipBodyVelocity then
+        noclipBodyVelocity:Destroy()
+        noclipBodyVelocity = nil
+    end
+
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") and part.CanCollide then
+            part.CanCollide = not enabled
+        end
+    end
+
+    if enabled then
+        local hrp = getHumanoidRootPart(char)
+        if hrp then
+            noclipBodyVelocity = Instance.new("BodyVelocity")
+            noclipBodyVelocity.MaxForce = Vector3.new(0, math.huge, 0)
+            noclipBodyVelocity.Velocity = Vector3.new(0, 0, 0)
+            noclipBodyVelocity.Parent = hrp
+            
+            noclipConnection = RunService.RenderStepped:Connect(function()
+                if hrp and noclipBodyVelocity then
+                    noclipBodyVelocity.Velocity = hrp.Velocity -- Mevcut hızı koru
+                end
+            end)
+        end
+    end
+end
+
+local function toggleAntiRagdoll(enabled)
+    if antiRagdollConnection then
+        antiRagdollConnection:Disconnect()
+        antiRagdollConnection = nil
+    end
+
+    if enabled then
+        antiRagdollConnection = RunService.Heartbeat:Connect(function()
+            local humanoid = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Humanoid")
+            if humanoid and humanoid.Sit then
+                humanoid.Sit = false
+            end
+        end)
+    end
+end
+
+-- === Gelişmiş ESP Sistemi ===
+local function clearESP(plr)
+    if espData[plr] then
+        for _, obj in pairs(espData[plr]) do
+            pcall(function() obj:Destroy() end)
+        end
+        espData[plr] = nil
+    end
+end
+
+local function createOrUpdateBillboard(data, name, parent, properties)
+    if not data[name] then
+        data[name] = Instance.new("BillboardGui", parent)
+        for propName, propValue in pairs(properties.instance) do
+            data[name][propName] = propValue
+        end
+        
+        local label = Instance.new("TextLabel", data[name])
+        for propName, propValue in pairs(properties.label) do
+            label[propName] = propValue
+        end
+    end
+    return data[name], data[name].TextLabel
+end
+
+local function updateESPComponents(plr, hrp, role, roleColor, hum)
+    local data = espData[plr]
+    if not data then return end
+    
+    -- Box ESP
+    if state.espActive then
+        if not data.box then
+            data.box = Instance.new("BoxHandleAdornment", camera)
+            data.box.AlwaysOnTop = true
+            data.box.ZIndex = 10
+            data.box.Size = Vector3.new(4, 6, 2)
+        end
+        data.box.Adornee = hrp
+        data.box.Color3 = roleColor
+        data.box.Transparency = Config.ESP.BoxTransparency
+        data.box.Visible = true
+    elseif data.box then
+        data.box.Visible = false
+    end
+
+    -- Nametag ESP
+    local nametag, nameLabel = createOrUpdateBillboard(data, "nametag", espScreenGui, {
+        instance = { Size = UDim2.new(0, 140, 0, 30), StudsOffset = Vector3.new(0, 3.5, 0), AlwaysOnTop = true },
+        label = { Size = UDim2.new(1,0,1,0), BackgroundTransparency = 1, TextStrokeTransparency = 0.5, Font = Enum.Font.GothamSemibold }
+    })
+    nametag.Adornee = hrp
+    nametag.Enabled = state.espActive
+    if state.espActive then
+        nameLabel.TextColor3 = roleColor
+        nameLabel.Text = getRoleEmoji(role) .. " " .. plr.Name
+        nameLabel.TextSize = Config.ESP.NametagFontSize
+    end
+    
+    -- Distance ESP
+    local distance, distLabel = createOrUpdateBillboard(data, "distance", espScreenGui, {
+        instance = { Size = UDim2.new(0, 100, 0, 20), StudsOffset = Vector3.new(0, -2, 0), AlwaysOnTop = true },
+        label = { Size = UDim2.new(1,0,1,0), BackgroundTransparency = 1, TextColor3 = Color3.fromRGB(255,255,255), TextStrokeTransparency = 0.5, Font = Enum.Font.Gotham }
+    })
+    distance.Adornee = hrp
+    distance.Enabled = state.distanceESPActive
+    if state.distanceESPActive and localPlayer.Character and getHumanoidRootPart(localPlayer.Character) then
+        local distanceVal = getDistance(hrp.Position, getHumanoidRootPart(localPlayer.Character).Position)
+        distLabel.Text = distanceVal .. "m"
+        distLabel.TextSize = Config.ESP.DistanceFontSize
+    end
+    
+    -- Health Bar ESP
+    if Config.ESP.HealthBarEnabled and hum then
+        local healthBar, healthLabel = createOrUpdateBillboard(data, "healthbar", espScreenGui, {
+            instance = { Size = UDim2.new(0, 80, 0, 15), StudsOffset = Vector3.new(0, -3.5, 0), AlwaysOnTop = true },
+            label = { Size = UDim2.new(1,0,1,0), BackgroundTransparency = 1, TextColor3 = Color3.fromRGB(0,255,0), TextStrokeTransparency = 0.5, Font = Enum.Font.Gotham }
+        })
+        healthBar.Adornee = hrp
+        healthBar.Enabled = state.espActive
+        if state.espActive then
+            local healthPercent = math_floor((hum.Health / hum.MaxHealth) * 100)
+            healthLabel.Text = "HP: " .. healthPercent .. "%"
+            healthLabel.TextSize = 10
+            if healthPercent > 75 then
+                healthLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+            elseif healthPercent > 25 then
+                healthLabel.TextColor3 = Color3.fromRGB(255, 255, 0)
+            else
+                healthLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+            end
+        end
+    end
+end
+
+-- Chams (Highlight) sistemi
+local function updateChams(plr, char, roleColor)
+    local data = espData[plr]
+    if not data then return end
+
+    if state.chamsActive then
+        if not data.highlight then
+            -- Highlight'ı camera yerine char'a parent yap
+            data.highlight = Instance.new("Highlight")
+            data.highlight.Parent = char
+        end
+        data.highlight.Enabled = true
+        data.highlight.Adornee = char
+        data.highlight.DepthMode = Enum.HighlightDepthMode.Occluded
+        data.highlight.FillColor = roleColor
+        data.highlight.OutlineColor = roleColor
+        data.highlight.FillTransparency = Config.ESP.ChamsTransparency
+        data.highlight.OutlineTransparency = Config.ESP.ChamsTransparency / 2
+    elseif data.highlight then
+        data.highlight.Enabled = false
+    end
+end
+
+-- Tracers sistemi
+local function updateTracer(plr, hrp, roleColor)
+    local data = espData[plr]
+    if not data then return end
+
+    if state.tracersActive then
+        local screenPos, onScreen = camera:WorldToScreenPoint(hrp.Position)
+        if onScreen then
+            if not data.tracer then
+                data.tracer = Instance.new("Frame", espScreenGui)
+                data.tracer.AnchorPoint = Vector2.new(0.5, 1)
+                data.tracer.BorderSizePixel = 0
+            end
+            local startPos = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y)
+            local diff = Vector2.new(screenPos.X, screenPos.Y) - startPos
+            
+            data.tracer.Visible = true
+            data.tracer.Size = UDim2.new(0, diff.Magnitude, 0, Config.ESP.TracerThickness)
+            data.tracer.Position = UDim2.fromOffset(startPos.X, startPos.Y)
+            data.tracer.Rotation = math.deg(math.atan2(diff.Y, diff.X))
+            data.tracer.BackgroundColor3 = roleColor
+            data.tracer.BackgroundTransparency = 0.3
+        elseif data.tracer then
+            data.tracer.Visible = false
+        end
+    elseif data.tracer then
+        data.tracer.Visible = false
+    end
+end
+
+-- Ana ESP güncelleme fonksiyonu
+local function updatePlayerESP(plr)
+    local char = plr.Character
+    if plr == localPlayer or not char then clearESP(plr); return end
+    
+    local hrp = getHumanoidRootPart(char)
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not hum then clearESP(plr); return end
+    
+    if not espData[plr] then espData[plr] = {} end
+    local role = getRole(plr)
+    local roleColor = getRoleColor(role)
+    
+    updateESPComponents(plr, hrp, role, roleColor, hum)
+    updateChams(plr, char, roleColor)
+end
+
+-- === Item ESP Sistemi ===
+local function clearItemESP()
+    for key, icon in pairs(itemESPIcons) do
+        pcall(function() icon:Destroy() end)
+    end
+    itemESPIcons = {}
+end
+
+local function createItemESP(itemPart)
+    if not itemPart or not itemPart:IsA("BasePart") or not itemPart.Parent then return end
+    
+    local icon = itemESPIcons[itemPart]
+    if not icon then
+        icon = Instance.new("BillboardGui", camera)
+        icon.Size = UDim2.new(0, 50, 0, 50)
+        icon.StudsOffset = Vector3.new(0, 2, 0)
+        icon.AlwaysOnTop = true
+
+        local nameLabel = Instance.new("TextLabel", icon)
+        nameLabel.Size = UDim2.new(1, 0, 1, 0)
+        nameLabel.BackgroundTransparency = 1
+        nameLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+        nameLabel.TextStrokeTransparency = 0.5
+        nameLabel.Font = Enum.Font.GothamBold
+        nameLabel.TextScaled = true
+
+        itemESPIcons[itemPart] = icon
+    end
+    icon.Adornee = itemPart
+
+    local itemName = itemPart.Name
+    local displayColor = Color3.fromRGB(255, 255, 255)
+
+    if itemName == "GunDrop" then 
+        displayColor = Color3.fromRGB(0, 255, 0)
+        icon.TextLabel.Text = "🔫 SILAH"
+    elseif itemName == "KnifeDrop" then 
+        displayColor = Color3.fromRGB(255, 0, 0)
+        icon.TextLabel.Text = "🔪 BIÇAK"
+    elseif itemName == "Coin" then 
+        displayColor = Color3.fromRGB(255, 215, 0)
+        icon.TextLabel.Text = "💰 COIN"
+    end
+
+    icon.TextLabel.TextColor3 = displayColor
+end
+
+-- === Combat Sistemi ===
+local function killAll()
+    if getRole(localPlayer) ~= "Murderer" then 
+        warn("[Kill All] Bu özelliği kullanmak için Katil olmalısınız."); 
+        return 
+    end
+    
+    local char = localPlayer.Character
+    local hrp = getHumanoidRootPart(char)
+    local knife = char:FindFirstChild("Knife", true) or localPlayer.Backpack:FindFirstChild("Knife")
+    
+    if not (char and hrp and knife) then 
+        warn("[Kill All] Karakter, HRP veya Bıçak bulunamadı."); 
+        return 
+    end
+    
+    local originalCFrame = hrp.CFrame
+    local killedCountThisRun = 0
+    
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= localPlayer and plr.Character then
+            local targetHum = plr.Character:FindFirstChildOfClass("Humanoid")
+            local targetHrp = getHumanoidRootPart(plr.Character)
+            
+            if targetHum and targetHum.Health > 0 and targetHrp then
+                local targetPos = targetHrp.CFrame * CFrame.new(0, 0, -math_random(2, 4))
+                local success, err = pcall(function() hrp.CFrame = targetPos end)
+                if not success then warn("[Kill All TP Hata] " .. tostring(err)); continue end
+                
+                task_wait(math_random(5, 10) / 100)
+                
+                local successActivate, errActivate = pcall(function() knife:Activate() end)
+                
+                if successActivate then
+                    killedCountThisRun = killedCountThisRun + 1
+                else
+                    warn("[Kill All Hata] Bıçak aktive edilemedi: " .. tostring(errActivate))
+                end
+                
+                task_wait(math_random(8, 12) / 100)
+            end
+        end
+    end
+    
+    hrp.CFrame = originalCFrame
+    currentKills = currentKills + killedCountThisRun
+    updateStats()
+    warn("[Kill All] Tamamlandı! " .. killedCountThisRun .. " oyuncu öldürüldü.")
+end
+
+local function smartShootMurder(shoot_delay)
+    if getRole(localPlayer) ~= "Sheriff" then 
+        warn("[Şerif Atışı] Bu özelliği kullanmak için Şerif olmalısınız."); 
+        return 
+    end
+    
+    local char, hrp, gun = localPlayer.Character, getHumanoidRootPart(localPlayer.Character), 
+                                   localPlayer.Character:FindFirstChild("Gun", true) or localPlayer.Backpack:FindFirstChild("Gun")
+    
+    if not (char and hrp and gun and camera) then 
+        warn("[Şerif Atışı] Gerekli bileşenler bulunamadı."); 
+        return 
+    end
+    
+    local targetMurderer
+    for _, plr in ipairs(Players:GetPlayers()) do 
+        if plr ~= localPlayer and getRole(plr) == "Murderer" then 
+            targetMurderer = plr; 
+            break 
+        end 
+    end
+    
+    if not (targetMurderer and targetMurderer.Character) then 
+        warn("[Şerif Atışı] Katil bulunamadı."); 
+        return 
+    end
+    
+    local targetChar, targetHum, aimTarget = targetMurderer.Character, 
+                                             targetMurderer.Character:FindFirstChildOfClass("Humanoid"), 
+                                             getHumanoidRootPart(targetMurderer.Character)
+    
+    if not (targetHum and targetHum.Health > 0 and aimTarget) then 
+        warn("[Şerif Atışı] Katil hedef alınamaz durumda."); 
+        return 
+    end
+    
+    local velocity = aimTarget.Velocity or Vector3.new()
+    local pingValue = Stats.Network.ServerStatsItem["Data Ping"]:GetValue() / 1000
+    local distance = (hrp.Position - aimTarget.Position).Magnitude
+    
+    local distanceMultiplier = math_clamp(distance / 100, 1, 1.5)
+    local predictionTime = math.max(Config.Prediction.MinTime, 
+                                   pingValue * Config.Prediction.PingMultiplier + 
+                                   velocity.Magnitude * Config.Prediction.VelocityMultiplier * distanceMultiplier)
+    
+    local predictedPosition = aimTarget.Position + (velocity * predictionTime) + Vector3.new(0, Config.Prediction.AimOffsetY, 0)
+    
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+    raycastParams.FilterDescendantsInstances = {char, gun, targetChar}
+    
+    local origin = camera.CFrame.Position
+    local direction = (predictedPosition - origin).Unit
+    local rayDistance = (predictedPosition - origin).Magnitude + 1
+    
+    local result = Workspace:Raycast(origin, direction * rayDistance, raycastParams)
+    local shouldFire = not result or (result.Instance and result.Instance:IsDescendantOf(targetChar))
+    
+    if shouldFire then
+        local originalCFrame = camera.CFrame
+        camera.CFrame = CFrame.new(origin, predictedPosition)
+        if shoot_delay then task_wait(shoot_delay) end
+        
+        local remoteEventToUse = findRemoteEvent(POSSIBLE_REMOTE_EVENT_NAMES, cachedShootRemote)
+        
+        if remoteEventToUse then
+            local success, err = pcall(function() 
+                remoteEventToUse:FireServer("Fire", predictedPosition, targetMurderer.Name) 
+            end)
+            if success then
+                 currentKills = currentKills + 1
+                 updateStats()
+            else
+                warn("[Remote Hata] '" .. remoteEventToUse.Name .. "': " .. tostring(err)) 
+                cachedShootRemote.remote = nil
+            end
+        else
+            warn("[Şerif Atışı] RemoteEvent bulunamadı.")
+        end
+        
+        camera.CFrame = originalCFrame
+    else
+        warn("[Şerif Atışı] Hedef engellendi, ateş edilmedi.")
+    end
+end
+
+-- === GUI Sistemi ===
+local function createGUI()
+    -- Ana ScreenGui
+    screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "UltraMM2GUI"
+    screenGui.Parent = localPlayer:WaitForChild("PlayerGui")
+    screenGui.ResetOnSpawn = false
+    
+    -- ESP için ayrı ScreenGui
+    espScreenGui = Instance.new("ScreenGui")
+    espScreenGui.Name = "UltraMM2ESP"
+    espScreenGui.Parent = localPlayer:WaitForChild("PlayerGui")
+    espScreenGui.ResetOnSpawn = false
+    
+    -- Ana Frame
+    mainFrame = Instance.new("Frame")
+    mainFrame.Name = "MainFrame"
+    mainFrame.Size = UDim2.new(0, 400, 0, 600)
+    mainFrame.Position = UDim2.new(0, 50, 0, 50)
+    mainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+    mainFrame.BorderSizePixel = 0
+    mainFrame.Active = true
+    mainFrame.Draggable = true
+    mainFrame.Parent = screenGui
+    
+    -- Ana Frame köşe yuvarlatma
+    local mainCorner = Instance.new("UICorner")
+    mainCorner.CornerRadius = UDim.new(0, 10)
+    mainCorner.Parent = mainFrame
+    
+    -- Başlık
+    local titleLabel = Instance.new("TextLabel")
+    titleLabel.Name = "TitleLabel"
+    titleLabel.Size = UDim2.new(1, 0, 0, 40)
+    titleLabel.Position = UDim2.new(0, 0, 0, 0)
+    titleLabel.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    titleLabel.BorderSizePixel = 0
+    titleLabel.Text = "Ultra MM2 GUI V22.0"
+    titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    titleLabel.TextSize = 18
+    titleLabel.Font = Enum.Font.GothamBold
+    titleLabel.Parent = mainFrame
+    
+    local titleCorner = Instance.new("UICorner")
+    titleCorner.CornerRadius = UDim.new(0, 10)
+    titleCorner.Parent = titleLabel
+    
+    -- Kapatma butonu
+    local closeButton = Instance.new("TextButton")
+    closeButton.Name = "CloseButton"
+    closeButton.Size = UDim2.new(0, 30, 0, 30)
+    closeButton.Position = UDim2.new(1, -35, 0, 5)
+    closeButton.BackgroundColor3 = Color3.fromRGB(255, 60, 60)
+    closeButton.BorderSizePixel = 0
+    closeButton.Text = "X"
+    closeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    closeButton.TextSize = 14
+    closeButton.Font = Enum.Font.GothamBold
+    closeButton.Parent = titleLabel
+    
+    local closeCorner = Instance.new("UICorner")
+    closeCorner.CornerRadius = UDim.new(0, 5)
+    closeCorner.Parent = closeButton
+    
+    closeButton.MouseButton1Click:Connect(function()
+        screenGui:Destroy()
+    end)
+    
+    -- ScrollingFrame
+    local scrollFrame = Instance.new("ScrollingFrame")
+    scrollFrame.Name = "ScrollFrame"
+    scrollFrame.Size = UDim2.new(1, -20, 1, -60)
+    scrollFrame.Position = UDim2.new(0, 10, 0, 50)
+    scrollFrame.BackgroundTransparency = 1
+    scrollFrame.BorderSizePixel = 0
+    scrollFrame.ScrollBarThickness = 8
+    scrollFrame.ScrollBarImageColor3 = Color3.fromRGB(100, 100, 100)
+    scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 1200)
+    scrollFrame.Parent = mainFrame
+    
+    -- UIListLayout
+    local listLayout = Instance.new("UIListLayout")
+    listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    listLayout.Padding = UDim.new(0, 5)
+    listLayout.Parent = scrollFrame
+    
+    -- Yardımcı fonksiyon: Buton oluşturma
+    local function createButton(name, text, callback, parent)
+        local button = Instance.new("TextButton")
+        button.Name = name
+        button.Size = UDim2.new(1, 0, 0, 35)
+        button.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+        button.BorderSizePixel = 0
+        button.Text = text
+        button.TextColor3 = Color3.fromRGB(255, 255, 255)
+        button.TextSize = 14
+        button.Font = Enum.Font.Gotham
+        button.Parent = parent or scrollFrame
+        
+        local buttonCorner = Instance.new("UICorner")
+        buttonCorner.CornerRadius = UDim.new(0, 5)
+        buttonCorner.Parent = button
+        
+        button.MouseButton1Click:Connect(callback)
+        return button
+    end
+    
+    -- Yardımcı fonksiyon: Toggle oluşturma
+    local function createToggle(name, text, stateKey, callback, parent)
+        local frame = Instance.new("Frame")
+        frame.Name = name .. "Frame"
+        frame.Size = UDim2.new(1, 0, 0, 35)
+        frame.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+        frame.BorderSizePixel = 0
+        frame.Parent = parent or scrollFrame
+        
+        local frameCorner = Instance.new("UICorner")
+        frameCorner.CornerRadius = UDim.new(0, 5)
+        frameCorner.Parent = frame
+        
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.new(1, -60, 1, 0)
+        label.Position = UDim2.new(0, 10, 0, 0)
+        label.BackgroundTransparency = 1
+        label.Text = text
+        label.TextColor3 = Color3.fromRGB(255, 255, 255)
+        label.TextSize = 14
+        label.Font = Enum.Font.Gotham
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        label.Parent = frame
+        
+        local toggle = Instance.new("TextButton")
+        toggle.Name = name
+        toggle.Size = UDim2.new(0, 50, 0, 25)
+        toggle.Position = UDim2.new(1, -55, 0.5, -12.5)
+        toggle.BackgroundColor3 = state[stateKey] and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 60, 60)
+        toggle.BorderSizePixel = 0
+        toggle.Text = state[stateKey] and "ON" or "OFF"
+        toggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+        toggle.TextSize = 12
+        toggle.Font = Enum.Font.GothamBold
+        toggle.Parent = frame
+        
+        local toggleCorner = Instance.new("UICorner")
+        toggleCorner.CornerRadius = UDim.new(0, 5)
+        toggleCorner.Parent = toggle
+        
+        toggle.MouseButton1Click:Connect(function()
+            state[stateKey] = not state[stateKey]
+            toggle.BackgroundColor3 = state[stateKey] and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 60, 60)
+            toggle.Text = state[stateKey] and "ON" or "OFF"
+            if callback then callback(state[stateKey]) end
+            saveSettings()
+        end)
+        
+        return toggle
+    end
+    
+    -- Yardımcı fonksiyon: TextBox oluşturma
+    local function createTextBox(name, placeholderText, defaultValue, callback, parent)
+        local textBox = Instance.new("TextBox")
+        textBox.Name = name
+        textBox.Size = UDim2.new(1, 0, 0, 35)
+        textBox.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+        textBox.BorderSizePixel = 0
+        textBox.PlaceholderText = placeholderText
+        textBox.Text = defaultValue or ""
+        textBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+        textBox.PlaceholderColor3 = Color3.fromRGB(150, 150, 150)
+        textBox.TextSize = 14
+        textBox.Font = Enum.Font.Gotham
+        textBox.Parent = parent or scrollFrame
+        
+        local textBoxCorner = Instance.new("UICorner")
+        textBoxCorner.CornerRadius = UDim.new(0, 5)
+        textBoxCorner.Parent = textBox
+        
+        if callback then
+            textBox.FocusLost:Connect(function()
+                callback(textBox.Text)
+            end)
+        end
+        
+        return textBox
+    end
+    
+    -- === GUI Elemanları ===
+    
+    -- İstatistikler
+    statsLabel = Instance.new("TextLabel")
+    statsLabel.Name = "StatsLabel"
+    statsLabel.Size = UDim2.new(1, 0, 0, 35)
+    statsLabel.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    statsLabel.BorderSizePixel = 0
+    statsLabel.Text = "Rol: Innocent | Öldürme: 0 | Coin: 0"
+    statsLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    statsLabel.TextSize = 14
+    statsLabel.Font = Enum.Font.Gotham
+    statsLabel.Parent = scrollFrame
+    
+    local statsCorner = Instance.new("UICorner")
+    statsCorner.CornerRadius = UDim.new(0, 5)
+    statsCorner.Parent = statsLabel
+
+    -- FPS Label
+    fpsLabel = Instance.new("TextLabel")
+    fpsLabel.Name = "FPSLabel"
+    fpsLabel.Size = UDim2.new(1, 0, 0, 35)
+    fpsLabel.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    fpsLabel.BorderSizePixel = 0
+    fpsLabel.Text = "FPS: 0"
+    fpsLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    fpsLabel.TextSize = 14
+    fpsLabel.Parent = scrollFrame
+
+    local fpsCorner = Instance.new("UICorner")
+    fpsCorner.CornerRadius = UDim.new(0, 5)
+    fpsCorner.Parent = fpsLabel
+    
+    -- ESP Bölümü
+    local espSection = Instance.new("TextLabel")
+    espSection.Size = UDim2.new(1, 0, 0, 30)
+    espSection.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+    espSection.BorderSizePixel = 0
+    espSection.Text = "🔍 ESP & Görsel Özellikler"
+    espSection.TextColor3 = Color3.fromRGB(255, 255, 255)
+    espSection.TextSize = 16
+    espSection.Font = Enum.Font.GothamBold
+    espSection.Parent = scrollFrame
+    
+    local espSectionCorner = Instance.new("UICorner")
+    espSectionCorner.CornerRadius = UDim.new(0, 5)
+    espSectionCorner.Parent = espSection
+    
+    createToggle("ESPToggle", "ESP (Oyuncu Kutuları)", "espActive")
+    createToggle("ChamsToggle", "Chams (Duvar Arkası)", "chamsActive")
+    createToggle("TracersToggle", "Tracers (Çizgiler)", "tracersActive")
+    createToggle("DistanceESPToggle", "Mesafe Gösterimi", "distanceESPActive")
+    createToggle("GunESPToggle", "Silah ESP", "gunESPActive")
+    createToggle("CrosshairToggle", "Crosshair", "crosshairActive")
+    
+    -- Combat Bölümü
+    local combatSection = Instance.new("TextLabel")
+    combatSection.Size = UDim2.new(1, 0, 0, 30)
+    combatSection.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+    combatSection.BorderSizePixel = 0
+    combatSection.Text = "⚔️ Savaş Özellikleri"
+    combatSection.TextColor3 = Color3.fromRGB(255, 255, 255)
+    combatSection.TextSize = 16
+    combatSection.Font = Enum.Font.GothamBold
+    combatSection.Parent = scrollFrame
+    
+    local combatSectionCorner = Instance.new("UICorner")
+    combatSectionCorner.CornerRadius = UDim.new(0, 5)
+    combatSectionCorner.Parent = combatSection
+    
+    createButton("KillAllButton", "🔪 Kill All (Katil)", function()
+        killAll()
+    end)
+    
+    createButton("ShootMurdererButton", "🔫 Katili Vur (Şerif)", function()
+        smartShootMurder(Config.Combat.ManualShootDelay)
+    end)
+    
+    createToggle("KillAuraToggle", "Kill Aura", "killAuraActive")
+    createToggle("AutoShootToggle", "Otomatik Atış", "autoShootActive")
+    createToggle("AutoKnifeThrowToggle", "Otomatik Bıçak Atma", "autoKnifeThrowActive")
+    
+    -- Fling Bölümü
+    local flingSection = Instance.new("TextLabel")
+    flingSection.Size = UDim2.new(1, 0, 0, 30)
+    flingSection.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+    flingSection.BorderSizePixel = 0
+    flingSection.Text = "💥 Fling Sistemi"
+    flingSection.TextColor3 = Color3.fromRGB(255, 255, 255)
+    flingSection.TextSize = 16
+    flingSection.Font = Enum.Font.GothamBold
+    flingSection.Parent = scrollFrame
+    
+    local flingSectionCorner = Instance.new("UICorner")
+    flingSectionCorner.CornerRadius = UDim.new(0, 5)
+    flingSectionCorner.Parent = flingSection
+    
+    createToggle("AntiFlingToggle", "🛡️ Anti-Fling", "antiFlingActive")
+    
+    flingPlayerTextBox = createTextBox("FlingPlayerTextBox", "Fling yapılacak oyuncu adı...", state.flingPlayerName, function(text)
+        state.flingPlayerName = text
+        saveSettings()
+    end)
+    
+    createToggle("FlingToggle", "💥 Fling Aktif", "flingActive")
+    
+    -- Hareket Bölümü
+    local movementSection = Instance.new("TextLabel")
+    movementSection.Size = UDim2.new(1, 0, 0, 30)
+    movementSection.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+    movementSection.BorderSizePixel = 0
+    movementSection.Text = "🏃 Hareket Özellikleri"
+    movementSection.TextColor3 = Color3.fromRGB(255, 255, 255)
+    movementSection.TextSize = 16
+    movementSection.Font = Enum.Font.GothamBold
+    movementSection.Parent = scrollFrame
+    
+    local movementSectionCorner = Instance.new("UICorner")
+    movementSectionCorner.CornerRadius = UDim.new(0, 5)
+    movementSectionCorner.Parent = movementSection
+    
+    createToggle("SpeedToggle", "Hız Hilesi", "speedActive", function(enabled)
+        setSpeed(enabled)
+    end)
+    local speedTextBox = createTextBox("SpeedValueTextBox", "Hız değeri (örn: 50)", tostring(state.speedValue), function(text)
+        local num = tonumber(text)
+        if num and num > 0 then
+            state.speedValue = num
+            if state.speedActive then
+                setSpeed(true)
+            end
+            saveSettings()
+        else
+            warn("Geçersiz hız değeri. Lütfen sayı girin.")
+        end
+    end)
+    speedTextBox.Text = tostring(state.speedValue)
+    
+    createToggle("InfJumpToggle", "Sonsuz Zıplama", "infJumpActive", function(enabled)
+        toggleInfJump(enabled)
+    end)
+    local jumpPowerTextBox = createTextBox("JumpPowerValueTextBox", "Zıplama Gücü (örn: 70)", tostring(state.jumpPowerValue), function(text)
+        local num = tonumber(text)
+        if num and num > 0 then
+            state.jumpPowerValue = num
+            if localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Humanoid") then
+                localPlayer.Character:FindFirstChildOfClass("Humanoid").JumpPower = num
+            end
+            saveSettings()
+        else
+            warn("Geçersiz zıplama gücü. Lütfen sayı girin.")
+        end
+    end)
+    jumpPowerTextBox.Text = tostring(state.jumpPowerValue)
+    
+    createToggle("NoclipToggle", "Noclip", "noclipActive", function(enabled)
+        toggleNoclip(enabled)
+    end)
+    
+    createToggle("AntiRagdollToggle", "Anti-Ragdoll", "antiRagdollActive", function(enabled)
+        toggleAntiRagdoll(enabled)
+    end)
+    
+    -- Otomatik Bölümü
+    local autoSection = Instance.new("TextLabel")
+    autoSection.Size = UDim2.new(1, 0, 0, 30)
+    autoSection.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+    autoSection.BorderSizePixel = 0
+    autoSection.Text = "🤖 Otomatik Özellikler"
+    autoSection.TextColor3 = Color3.fromRGB(255, 255, 255)
+    autoSection.TextSize = 16
+    autoSection.Font = Enum.Font.GothamBold
+    autoSection.Parent = scrollFrame
+    
+    local autoSectionCorner = Instance.new("UICorner")
+    autoSectionCorner.CornerRadius = UDim.new(0, 5)
+    autoSectionCorner.Parent = autoSection
+    
+    createToggle("AutoTPToggle", "Otomatik TP", "autoTPActive")
+    createToggle("AutoCoinToggle", "Otomatik Coin Toplama", "autoCoinActive")
+    createToggle("AntiAFKToggle", "Anti-AFK", "antiAFKActive")
+    
+    -- Teleport Bölümü
+    local teleportSection = Instance.new("TextLabel")
+    teleportSection.Size = UDim2.new(1, 0, 0, 30)
+    teleportSection.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+    teleportSection.BorderSizePixel = 0
+    teleportSection.Text = "🌐 Teleport"
+    teleportSection.TextColor3 = Color3.fromRGB(255, 255, 255)
+    teleportSection.TextSize = 16
+    teleportSection.Font = Enum.Font.GothamBold
+    teleportSection.Parent = scrollFrame
+    
+    local teleportSectionCorner = Instance.new("UICorner")
+    teleportSectionCorner.CornerRadius = UDim.new(0, 5)
+    teleportSectionCorner.Parent = teleportSection
+    
+    for locationName, position in pairs(TELEPORT_LOCATIONS) do
+        createButton("TP" .. locationName, "📍 " .. locationName, function()
+            local hrp = getHumanoidRootPart(localPlayer.Character)
+            if hrp then
+                hrp.CFrame = CFrame.new(position)
+            end
+        end)
+    end
+    
+    -- Ayarlar butonu
+    createButton("SaveSettingsButton", "💾 Ayarları Kaydet", function()
+        saveSettings()
+        warn("Ayarlar kaydedildi!")
+    end)
+    
+    createButton("LoadSettingsButton", "📁 Ayarları Yükle", function()
+        loadSettings()
+        -- GUI elementlerini yüklenen ayarlara göre güncellemek için manuel tetikleme
+        setSpeed(state.speedActive)
+        toggleInfJump(state.infJumpActive)
+        toggleNoclip(state.noclipActive)
+        toggleAntiRagdoll(state.antiRagdollActive)
+        
+        if localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Humanoid") then
+            localPlayer.Character:FindFirstChildOfClass("Humanoid").JumpPower = state.jumpPowerValue
+        end
+
+        -- GUI toggle'larını manuel olarak güncelle (yüklenen ayarları göstermesi için)
+        -- Bu kısmı createGUI'nin içindeki toggle oluşturma mantığına uygun olarak ekleyebilirsiniz.
+        -- Şimdilik, script yeniden yüklendiğinde ayarların uygulanması yeterli olacaktır.
+        -- Ancak tam bir GUI senkronizasyonu için, toggle'ların ve textbox'ların değerleri manuel olarak ayarlanmalı.
+        -- Örneğin:
+        -- if mainFrame:FindFirstChild("ScrollFrame"):FindFirstChild("SpeedToggle") then
+        --     local toggle = mainFrame:FindFirstChild("ScrollFrame"):FindFirstChild("SpeedToggle")
+        --     toggle.BackgroundColor3 = state.speedActive and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 60, 60)
+        --     toggle.Text = state.speedActive and "ON" or "OFF"
+        -- end
+        -- if mainFrame:FindFirstChild("ScrollFrame"):FindFirstChild("SpeedValueTextBox") then
+        --     mainFrame:FindFirstChild("ScrollFrame"):FindFirstChild("SpeedValueTextBox").Text = tostring(state.speedValue)
+        -- end
+        
+        warn("Ayarlar yüklendi!")
+    end)
+end
+
+-- === Ana Döngüler ve Olay İşleyiciler ===
+
+-- ESP güncelleme döngüsü
+local function espUpdateLoop()
+    spawn(function()
+        while true do
+            if tick() - lastESPUpdate >= Config.ESP.UpdateRate then
+                for _, plr in ipairs(Players:GetPlayers()) do
+                    updatePlayerESP(plr)
+                end
+                lastESPUpdate = tick()
+            end
+            task_wait(Config.ESP.UpdateRate)
+        end
+    end)
+end
+
+-- Tracer güncelleme döngüsü (RenderStepped)
+local function tracerUpdateLoop()
+    RunService.RenderStepped:Connect(function()
+        if state.tracersActive then
+            for _, plr in ipairs(Players:GetPlayers()) do
+                if plr ~= localPlayer and plr.Character and espData[plr] then
+                    local hrp = getHumanoidRootPart(plr.Character)
+                    if hrp then
+                        local role = getRole(plr)
+                        local roleColor = getRoleColor(role)
+                        updateTracer(plr, hrp, roleColor)
+                    end
+                end
+            end
+        end
+    end)
+end
+
+-- Anti-Fling ve Fling döngüsü
+local function flingUpdateLoop()
+    RunService.Stepped:Connect(function()
+        antiFling()
+        flingPlayerByName()
+    end)
+end
+
+-- Oyuncu olayları
+Players.PlayerAdded:Connect(function(plr)
+    plr.CharacterAdded:Connect(function()
+        task_wait(1) -- Karakterin tam yüklenmesini bekle
+        updatePlayerESP(plr)
+    end)
+end)
+
+Players.PlayerRemoving:Connect(function(plr)
+    clearESP(plr)
+end)
+
+-- Mevcut oyuncular için
+for _, plr in ipairs(Players:GetPlayers()) do
+    if plr.Character then
+        updatePlayerESP(plr)
+    end
+    plr.CharacterAdded:Connect(function()
+        task_wait(1)
+        updatePlayerESP(plr)
+    end)
+end
+
+-- Item ESP güncelleme
+Workspace.ChildAdded:Connect(function(child)
+    if state.gunESPActive then
+        task_wait(0.1)
+        if child.Name == "GunDrop" or child.Name == "KnifeDrop" or child.Name == "Coin" then
+            createItemESP(child)
+        end
+    end
+end)
+
+Workspace.ChildRemoved:Connect(function(child)
+    if itemESPIcons[child] then
+        itemESPIcons[child]:Destroy()
+        itemESPIcons[child] = nil
+    end
+end)
+
+-- Keybind işleyicisi
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    
+    for action, keyCode in pairs(keybinds) do
+        if input.KeyCode == keyCode then
+            if action == "toggle_gui" then
+                if screenGui then
+                    mainFrame.Visible = not mainFrame.Visible
+                end
+            elseif action == "manual_shoot" then
+                smartShootMurder(Config.Combat.ManualShootDelay)
+            elseif action == "kill_all" then
+                killAll()
+            elseif action == "toggle_esp" then
+                state.espActive = not state.espActive
+                saveSettings()
+            elseif action == "toggle_crosshair" then
+                state.crosshairActive = not state.crosshairActive
+                saveSettings()
+            elseif action == "toggle_anti_fling" then
+                state.antiFlingActive = not state.antiFlingActive
+                saveSettings()
+            end
+        end
+    end
+end)
+
+-- === Başlatma ===
+loadSettings()
+createGUI()
+espUpdateLoop()
+tracerUpdateLoop()
+flingUpdateLoop()
+updateStats()
+
+-- Yüklenen ayarlara göre hareket özelliklerini başlangıçta etkinleştir
+if state.speedActive then setSpeed(true) end
+if state.infJumpActive then toggleInfJump(true) end
+if state.noclipActive then toggleNoclip(true) end
+if state.antiRagdollActive then toggleAntiRagdoll(true) end
+
+-- Karakterin her yeniden doğuşunda hareket özelliklerini yeniden uygula
+localPlayer.CharacterAdded:Connect(function(char)
+    task_wait(0.5) -- Karakterin tamamen yüklenmesi için kısa bir bekleme
+    if state.speedActive then setSpeed(true) end
+    if state.infJumpActive then toggleInfJump(true) end
+    if state.noclipActive then toggleNoclip(true) end
+    if state.antiRagdollActive then toggleAntiRagdoll(true) end
+    
+    -- Zıplama gücünü de karakter doğduğunda ayarla
+    char:WaitForChild("Humanoid").JumpPower = state.jumpPowerValue
+end)
+
+
+-- FPS göstergesi
+spawn(function()
+    local lastTime = tick()
+    local frameCount = 0
+    
+    while true do
+        frameCount = frameCount + 1
+        local currentTime = tick()
+        
+        if currentTime - lastTime >= 1 then
+            local fps = math_floor(frameCount / (currentTime - lastTime))
+            if fpsLabel then
+                fpsLabel.Text = "FPS: " .. fps
+            end
+            frameCount = 0
+            lastTime = currentTime
+        end
+        
+        RunService.Heartbeat:Wait()
+    end
+end)
+
+-- === Özel Bildirim Sistemi ===
+local function notifyUser(message, duration)
+    local notificationGui = Instance.new("ScreenGui")
+    notificationGui.Name = "NotificationGui"
+    notificationGui.Parent = localPlayer:WaitForChild("PlayerGui")
+    notificationGui.ResetOnSpawn = false
+
+    local notificationFrame = Instance.new("Frame")
+    notificationFrame.Size = UDim2.new(0, 300, 0, 50)
+    notificationFrame.Position = UDim2.new(0.5, -150, 0.9, -50)
+    notificationFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    notificationFrame.BorderSizePixel = 0
+    notificationFrame.Parent = notificationGui
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = notificationFrame
+
+    local messageLabel = Instance.new("TextLabel")
+    messageLabel.Size = UDim2.new(1, 0, 1, 0)
+    messageLabel.BackgroundTransparency = 1
+    messageLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    messageLabel.TextSize = 14
+    messageLabel.Font = Enum.Font.GothamBold
+    messageLabel.Text = message
+    messageLabel.TextWrapped = true
+    messageLabel.Parent = notificationFrame
+
+    notificationFrame.Transparency = 0
+    messageLabel.TextTransparency = 0 -- TextLabel'ın metin saydamlığını da ayarla
+
+    local tweenInfo = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    local fadeInTween = TweenService:Create(notificationFrame, tweenInfo, {Transparency = 0})
+    local fadeOutTween = TweenService:Create(notificationFrame, tweenInfo, {Transparency = 1})
+
+    fadeInTween:Play()
+    task_wait(duration or 3)
+    fadeOutTween:Play()
+    fadeOutTween.Completed:Wait()
+    notificationGui:Destroy()
+end
+
+-- warn fonksiyonunu override et
+local originalWarn = warn
+warn = function(...)
+    originalWarn(...)
+    local message = table.concat({...}, " ")
+    notifyUser(message, 5)
+end
+
+warn("Ultra MM2 GUI V22.0 başarıyla yüklendi!")
+warn("Keybinds:")
+warn("F4 - GUI Aç/Kapat")
+warn("F5 - Manuel Atış")
+warn("F6 - Kill All")
+warn("F7 - ESP Aç/Kapat")
+warn("F8 - Crosshair Aç/Kapat")
+warn("F9 - Anti-Fling Aç/Kapat")
