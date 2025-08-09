@@ -15,6 +15,7 @@
     🎨 [İYİLEŞTİRME] GUI tasarımı ve kullanıcı deneyimi geliştirildi.
     💾 [İYİLEŞTİRME] Ayar sistemi genişletildi ve daha stabil hale getirildi.
     🏃 [YENİ] Hareket Özellikleri (Hız, Sonsuz Zıplama, Noclip, Anti-Ragdoll)
+    [GELİŞTİRİLDİ] GUI kaydırma sorunu giderildi.
 --]]
 
 -- Oyun Kimliği Kontrolü
@@ -515,13 +516,26 @@ local function toggleNoclip(enabled)
         local hrp = getHumanoidRootPart(char)
         if hrp then
             noclipBodyVelocity = Instance.new("BodyVelocity")
-            noclipBodyVelocity.MaxForce = Vector3.new(0, math.huge, 0)
+            noclipBodyVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
             noclipBodyVelocity.Velocity = Vector3.new(0, 0, 0)
             noclipBodyVelocity.Parent = hrp
             
             noclipConnection = RunService.RenderStepped:Connect(function()
                 if hrp and noclipBodyVelocity then
-                    noclipBodyVelocity.Velocity = hrp.Velocity
+                    local moveVector = UserInputService:GetMoveVector()
+                    local cameraCFrame = camera.CFrame
+                    local forward = cameraCFrame.LookVector * moveVector.Z
+                    local right = cameraCFrame.RightVector * moveVector.X
+                    local newVelocity = (forward + right) * state.speedValue
+                    
+                    if UserInputService:IsKeyDown(Enum.KeyCode.Q) then
+                        newVelocity = newVelocity - Vector3.new(0, state.speedValue, 0)
+                    end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.E) then
+                        newVelocity = newVelocity + Vector3.new(0, state.speedValue, 0)
+                    end
+                    
+                    noclipBodyVelocity.Velocity = newVelocity
                 end
             end)
         end
@@ -953,13 +967,67 @@ local function createGUI()
     scrollFrame.BorderSizePixel = 0
     scrollFrame.ScrollBarThickness = 8
     scrollFrame.ScrollBarImageColor3 = Color3.fromRGB(100, 100, 100)
-    scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 1200)
+    -- CanvasSize'ı otomatik olarak güncellemek için başlangıçta küçük bir değer veriyoruz
+    scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 1)
     scrollFrame.Parent = mainFrame
     
     local listLayout = Instance.new("UIListLayout")
     listLayout.SortOrder = Enum.SortOrder.LayoutOrder
     listLayout.Padding = UDim.new(0, 5)
     listLayout.Parent = scrollFrame
+
+    -- Kaydırma sorununu çözen dinamik CanvasSize güncelleme fonksiyonu
+    local function updateCanvasSize()
+        local contentSize = listLayout.AbsoluteContentSize.Y
+        scrollFrame.CanvasSize = UDim2.new(0, 0, 0, contentSize + 20) -- 20 piksel ek boşluk
+    end
+    
+    statsLabel = Instance.new("TextLabel")
+    statsLabel.Name = "StatsLabel"
+    statsLabel.Size = UDim2.new(1, 0, 0, 35)
+    statsLabel.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    statsLabel.BorderSizePixel = 0
+    statsLabel.Text = "Rol: Innocent | Öldürme: 0 | Coin: 0"
+    statsLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    statsLabel.TextSize = 14
+    statsLabel.Font = Enum.Font.Gotham
+    statsLabel.Parent = scrollFrame
+    
+    local statsCorner = Instance.new("UICorner")
+    statsCorner.CornerRadius = UDim.new(0, 5)
+    statsCorner.Parent = statsLabel
+
+    fpsLabel = Instance.new("TextLabel")
+    fpsLabel.Name = "FPSLabel"
+    fpsLabel.Size = UDim2.new(1, 0, 0, 35)
+    fpsLabel.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    fpsLabel.BorderSizePixel = 0
+    fpsLabel.Text = "FPS: 0"
+    fpsLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    fpsLabel.TextSize = 14
+    fpsLabel.Parent = scrollFrame
+
+    local fpsCorner = Instance.new("UICorner")
+    fpsCorner.CornerRadius = UDim.new(0, 5)
+    fpsCorner.Parent = fpsLabel
+    
+    local function createSection(text, parent)
+        local section = Instance.new("TextLabel")
+        section.Size = UDim2.new(1, 0, 0, 30)
+        section.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+        section.BorderSizePixel = 0
+        section.Text = text
+        section.TextColor3 = Color3.fromRGB(255, 255, 255)
+        section.TextSize = 16
+        section.Font = Enum.Font.GothamBold
+        section.Parent = parent or scrollFrame
+        
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 5)
+        corner.Parent = section
+        
+        return section
+    end
     
     local function createButton(name, text, callback, parent)
         local button = Instance.new("TextButton")
@@ -1026,6 +1094,7 @@ local function createGUI()
             toggle.Text = state[stateKey] and "ON" or "OFF"
             if callback then callback(state[stateKey]) end
             saveSettings()
+            updateCanvasSize()
         end)
         
         return toggle
@@ -1052,55 +1121,14 @@ local function createGUI()
         if callback then
             textBox.FocusLost:Connect(function()
                 callback(textBox.Text)
+                updateCanvasSize()
             end)
         end
         
         return textBox
     end
     
-    statsLabel = Instance.new("TextLabel")
-    statsLabel.Name = "StatsLabel"
-    statsLabel.Size = UDim2.new(1, 0, 0, 35)
-    statsLabel.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-    statsLabel.BorderSizePixel = 0
-    statsLabel.Text = "Rol: Innocent | Öldürme: 0 | Coin: 0"
-    statsLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-    statsLabel.TextSize = 14
-    statsLabel.Font = Enum.Font.Gotham
-    statsLabel.Parent = scrollFrame
-    
-    local statsCorner = Instance.new("UICorner")
-    statsCorner.CornerRadius = UDim.new(0, 5)
-    statsCorner.Parent = statsLabel
-
-    fpsLabel = Instance.new("TextLabel")
-    fpsLabel.Name = "FPSLabel"
-    fpsLabel.Size = UDim2.new(1, 0, 0, 35)
-    fpsLabel.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-    fpsLabel.BorderSizePixel = 0
-    fpsLabel.Text = "FPS: 0"
-    fpsLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-    fpsLabel.TextSize = 14
-    fpsLabel.Parent = scrollFrame
-
-    local fpsCorner = Instance.new("UICorner")
-    fpsCorner.CornerRadius = UDim.new(0, 5)
-    fpsCorner.Parent = fpsLabel
-    
-    local espSection = Instance.new("TextLabel")
-    espSection.Size = UDim2.new(1, 0, 0, 30)
-    espSection.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-    espSection.BorderSizePixel = 0
-    espSection.Text = "🔍 ESP & Görsel Özellikler"
-    espSection.TextColor3 = Color3.fromRGB(255, 255, 255)
-    espSection.TextSize = 16
-    espSection.Font = Enum.Font.GothamBold
-    espSection.Parent = scrollFrame
-    
-    local espSectionCorner = Instance.new("UICorner")
-    espSectionCorner.CornerRadius = UDim.new(0, 5)
-    espSectionCorner.Parent = espSection
-    
+    createSection("🔍 ESP & Görsel Özellikler", scrollFrame)
     createToggle("ESPToggle", "ESP (Oyuncu Kutuları)", "espActive")
     createToggle("ChamsToggle", "Chams (Duvar Arkası)", "chamsActive")
     createToggle("TracersToggle", "Tracers (Çizgiler)", "tracersActive")
@@ -1108,20 +1136,7 @@ local function createGUI()
     createToggle("GunESPToggle", "Silah ESP", "gunESPActive")
     createToggle("CrosshairToggle", "Crosshair", "crosshairActive")
     
-    local combatSection = Instance.new("TextLabel")
-    combatSection.Size = UDim2.new(1, 0, 0, 30)
-    combatSection.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-    combatSection.BorderSizePixel = 0
-    combatSection.Text = "⚔️ Savaş Özellikleri"
-    combatSection.TextColor3 = Color3.fromRGB(255, 255, 255)
-    combatSection.TextSize = 16
-    combatSection.Font = Enum.Font.GothamBold
-    combatSection.Parent = scrollFrame
-    
-    local combatSectionCorner = Instance.new("UICorner")
-    combatSectionCorner.CornerRadius = UDim.new(0, 5)
-    combatSectionCorner.Parent = combatSection
-    
+    createSection("⚔️ Savaş Özellikleri", scrollFrame)
     createButton("KillAllButton", "🔪 Kill All (Katil)", function()
         killAll()
     end)
@@ -1134,20 +1149,7 @@ local function createGUI()
     createToggle("AutoShootToggle", "Otomatik Atış", "autoShootActive")
     createToggle("AutoKnifeThrowToggle", "Otomatik Bıçak Atma", "autoKnifeThrowActive")
     
-    local flingSection = Instance.new("TextLabel")
-    flingSection.Size = UDim2.new(1, 0, 0, 30)
-    flingSection.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-    flingSection.BorderSizePixel = 0
-    flingSection.Text = "💥 Fling Sistemi"
-    flingSection.TextColor3 = Color3.fromRGB(255, 255, 255)
-    flingSection.TextSize = 16
-    flingSection.Font = Enum.Font.GothamBold
-    flingSection.Parent = scrollFrame
-    
-    local flingSectionCorner = Instance.new("UICorner")
-    flingSectionCorner.CornerRadius = UDim.new(0, 5)
-    flingSectionCorner.Parent = flingSection
-    
+    createSection("💥 Fling Sistemi", scrollFrame)
     createToggle("AntiFlingToggle", "🛡️ Anti-Fling", "antiFlingActive")
     
     flingPlayerTextBox = createTextBox("FlingPlayerTextBox", "Fling yapılacak oyuncu adı...", state.flingPlayerName, function(text)
@@ -1169,20 +1171,7 @@ local function createGUI()
         saveSettings()
     end)
     
-    local movementSection = Instance.new("TextLabel")
-    movementSection.Size = UDim2.new(1, 0, 0, 30)
-    movementSection.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-    movementSection.BorderSizePixel = 0
-    movementSection.Text = "🏃 Hareket Özellikleri"
-    movementSection.TextColor3 = Color3.fromRGB(255, 255, 255)
-    movementSection.TextSize = 16
-    movementSection.Font = Enum.Font.GothamBold
-    movementSection.Parent = scrollFrame
-    
-    local movementSectionCorner = Instance.new("UICorner")
-    movementSectionCorner.CornerRadius = UDim.new(0, 5)
-    movementSectionCorner.Parent = movementSection
-    
+    createSection("🏃 Hareket Özellikleri", scrollFrame)
     createToggle("SpeedToggle", "Hız Hilesi", "speedActive", function(enabled)
         setSpeed(enabled)
     end)
@@ -1225,38 +1214,12 @@ local function createGUI()
         toggleAntiRagdoll(enabled)
     end)
     
-    local autoSection = Instance.new("TextLabel")
-    autoSection.Size = UDim2.new(1, 0, 0, 30)
-    autoSection.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-    autoSection.BorderSizePixel = 0
-    autoSection.Text = "🤖 Otomatik Özellikler"
-    autoSection.TextColor3 = Color3.fromRGB(255, 255, 255)
-    autoSection.TextSize = 16
-    autoSection.Font = Enum.Font.GothamBold
-    autoSection.Parent = scrollFrame
-    
-    local autoSectionCorner = Instance.new("UICorner")
-    autoSectionCorner.CornerRadius = UDim.new(0, 5)
-    autoSectionCorner.Parent = autoSection
-    
+    createSection("🤖 Otomatik Özellikler", scrollFrame)
     createToggle("AutoTPToggle", "Otomatik TP", "autoTPActive")
     createToggle("AutoCoinToggle", "Otomatik Coin Toplama", "autoCoinActive")
     createToggle("AntiAFKToggle", "Anti-AFK", "antiAFKActive")
     
-    local teleportSection = Instance.new("TextLabel")
-    teleportSection.Size = UDim2.new(1, 0, 0, 30)
-    teleportSection.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-    teleportSection.BorderSizePixel = 0
-    teleportSection.Text = "🌐 Teleport"
-    teleportSection.TextColor3 = Color3.fromRGB(255, 255, 255)
-    teleportSection.TextSize = 16
-    teleportSection.Font = Enum.Font.GothamBold
-    teleportSection.Parent = scrollFrame
-    
-    local teleportSectionCorner = Instance.new("UICorner")
-    teleportSectionCorner.CornerRadius = UDim.new(0, 5)
-    teleportSectionCorner.Parent = teleportSection
-    
+    createSection("🌐 Teleport", scrollFrame)
     for locationName, position in pairs(TELEPORT_LOCATIONS) do
         createButton("TP" .. locationName, "📍 " .. locationName, function()
             local hrp = getHumanoidRootPart(localPlayer.Character)
@@ -1283,6 +1246,10 @@ local function createGUI()
         end
         warn("Ayarlar yüklendi!")
     end)
+    
+    -- UI'nın tamamı oluşturulduktan sonra CanvasSize'ı otomatik olarak güncelle
+    RunService.Stepped:Wait() -- Elementlerin yüklenmesi için kısa bir süre bekleyelim
+    updateCanvasSize()
 end
 
 -- === Ana Döngüler ve Olay İşleyiciler ===
