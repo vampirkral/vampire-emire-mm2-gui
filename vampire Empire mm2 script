@@ -1,10 +1,15 @@
 --[[
-    Ultra MM2 GUI | Gelişmiş ESP, Chams, Tracers ve Optimizasyonlar (V22.0 - Anti-Fling ve Fling Sistemi)
+    Ultra MM2 GUI | Gelişmiş ESP, Chams, Tracers ve Optimizasyonlar (V22.1 - Geliştirilmiş Fling Sistemi)
     Eğitim ve test amaçlıdır!
     
-    V22.0 Yenilikleri:
+    V22.1 Yenilikleri:
     🛡️ [YENİ] Anti-Fling sistemi eklendi (Fling saldırılarından korunma).
-    💥 [YENİ] İsimle Fling yapma özelliği eklendi (Belirtilen oyuncuyu fling yapma).
+    💥 [GELİŞTİRİLDİ] Fling sistemi optimize edildi:
+        - Daha güçlü ve kontrollü fling kuvveti
+        - Network ownership desteği
+        - Kısmi isim ve display name ile oyuncu hedefleme
+        - Cooldown ve süre sınırlamaları
+        - GUI'de daha iyi geri bildirim
     🎯 [YENİ] Gelişmiş hedefleme sistemi ve daha akıllı ESP.
     🔧 [İYİLEŞTİRME] Performans optimizasyonları ve kod temizliği.
     🎨 [İYİLEŞTİRME] GUI tasarımı ve kullanıcı deneyimi geliştirildi.
@@ -67,8 +72,10 @@ local Config = {
     },
     Fling = {
         AntiVelocityThreshold = 100,
-        FlingForce = Vector3.new(0, 200, 0),
-        FlingDirection = 50
+        FlingForce = Vector3.new(0, 5000, 0), -- Stronger upward force
+        FlingDirection = 2000, -- Forward/backward force magnitude
+        FlingDuration = 0.2, -- Duration to apply fling force
+        FlingCooldown = 1 -- Cooldown between fling attempts
     }
 }
 
@@ -110,6 +117,7 @@ local state = {
     antiFlingActive = false,
     flingPlayerName = "",
     flingActive = false,
+    lastFlingTime = 0
 }
 
 -- ESP Tabloları
@@ -209,7 +217,7 @@ local function findRemoteEvent(possibleNames, cacheTable, storage)
                 return remoteEvent
             end
         end
-        -- Fallback: Search through all descendants if not found in common locations
+        -- Fallback: Search through all descendants
         local foundInDescendants = game:FindFirstChild(eventName, true)
         if foundInDescendants and foundInDescendants:IsA("RemoteEvent") then
             cacheTable.remote = foundInDescendants
@@ -218,6 +226,16 @@ local function findRemoteEvent(possibleNames, cacheTable, storage)
         end
     end
     warn("RemoteEvent bulunamadı. Denenen isimler: " .. table.concat(possibleNames, ", "))
+    return nil
+end
+
+local function findPlayerByName(inputName)
+    inputName = inputName:lower()
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr.Name:lower():find(inputName) or (plr.DisplayName and plr.DisplayName:lower():find(inputName)) then
+            return plr
+        end
+    end
     return nil
 end
 
@@ -233,14 +251,12 @@ local function loadSettings()
     state.antiFlingActive = localPlayer:GetAttribute("MM2_AntiFlingActive") or false
     state.flingPlayerName = localPlayer:GetAttribute("MM2_FlingPlayerName") or ""
     state.flingActive = localPlayer:GetAttribute("MM2_FlingActive") or false
-    
-    -- Hareket özellikleri ayarları
+    state.lastFlingTime = localPlayer:GetAttribute("MM2_LastFlingTime") or 0
     state.speedActive = localPlayer:GetAttribute("MM2_SpeedActive") or false
     state.infJumpActive = localPlayer:GetAttribute("MM2_InfJumpActive") or false
     state.noclipActive = localPlayer:GetAttribute("MM2_NoclipActive") or false
     state.antiRagdollActive = localPlayer:GetAttribute("MM2_AntiRagdollActive") or false
 
-    -- Config değerlerini yükle
     Config.ESP.BoxTransparency = localPlayer:GetAttribute("MM2_ESPBoxTransparency") or 0.3
     Config.ESP.NametagFontSize = localPlayer:GetAttribute("MM2_ESPNametagSize") or 14
     Config.ESP.DistanceFontSize = localPlayer:GetAttribute("MM2_ESPDistanceSize") or 12
@@ -262,6 +278,52 @@ local function loadSettings()
             keybinds[k] = Enum.KeyCode[v] or keybinds[k]
         end
     end
+
+    -- Update GUI elements
+    if mainFrame and mainFrame:FindFirstChild("ScrollFrame") then
+        local scrollFrame = mainFrame.ScrollFrame
+        if flingPlayerTextBox then
+            flingPlayerTextBox.Text = state.flingPlayerName
+        end
+        local flingToggle = scrollFrame:FindFirstChild("FlingToggle")
+        if flingToggle then
+            flingToggle.BackgroundColor3 = state.flingActive and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 60, 60)
+            flingToggle.Text = state.flingActive and "ON" or "OFF"
+        end
+        local antiFlingToggle = scrollFrame:FindFirstChild("AntiFlingToggle")
+        if antiFlingToggle then
+            antiFlingToggle.BackgroundColor3 = state.antiFlingActive and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 60, 60)
+            antiFlingToggle.Text = state.antiFlingActive and "ON" or "OFF"
+        end
+        local speedToggle = scrollFrame:FindFirstChild("SpeedToggle")
+        if speedToggle then
+            speedToggle.BackgroundColor3 = state.speedActive and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 60, 60)
+            speedToggle.Text = state.speedActive and "ON" or "OFF"
+        end
+        local speedTextBox = scrollFrame:FindFirstChild("SpeedValueTextBox")
+        if speedTextBox then
+            speedTextBox.Text = tostring(state.speedValue)
+        end
+        local infJumpToggle = scrollFrame:FindFirstChild("InfJumpToggle")
+        if infJumpToggle then
+            infJumpToggle.BackgroundColor3 = state.infJumpActive and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 60, 60)
+            infJumpToggle.Text = state.infJumpActive and "ON" or "OFF"
+        end
+        local jumpPowerTextBox = scrollFrame:FindFirstChild("JumpPowerValueTextBox")
+        if jumpPowerTextBox then
+            jumpPowerTextBox.Text = tostring(state.jumpPowerValue)
+        end
+        local noclipToggle = scrollFrame:FindFirstChild("NoclipToggle")
+        if noclipToggle then
+            noclipToggle.BackgroundColor3 = state.noclipActive and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 60, 60)
+            noclipToggle.Text = state.noclipActive and "ON" or "OFF"
+        end
+        local antiRagdollToggle = scrollFrame:FindFirstChild("AntiRagdollToggle")
+        if antiRagdollToggle then
+            antiRagdollToggle.BackgroundColor3 = state.antiRagdollActive and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 60, 60)
+            antiRagdollToggle.Text = state.antiRagdollActive and "ON" or "OFF"
+        end
+    end
 end
 
 local function saveSettings()
@@ -275,8 +337,7 @@ local function saveSettings()
     localPlayer:SetAttribute("MM2_AntiFlingActive", state.antiFlingActive)
     localPlayer:SetAttribute("MM2_FlingPlayerName", state.flingPlayerName)
     localPlayer:SetAttribute("MM2_FlingActive", state.flingActive)
-    
-    -- Hareket özellikleri ayarlarını kaydet
+    localPlayer:SetAttribute("MM2_LastFlingTime", state.lastFlingTime)
     localPlayer:SetAttribute("MM2_SpeedActive", state.speedActive)
     localPlayer:SetAttribute("MM2_InfJumpActive", state.infJumpActive)
     localPlayer:SetAttribute("MM2_NoclipActive", state.noclipActive)
@@ -325,38 +386,77 @@ local function antiFling()
     if not state.antiFlingActive then return end
     local hrp = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
     if hrp then
-        -- Velocity kontrolü
-        local velocity = hrp.Velocity or hrp.AssemblyLinearVelocity
-        if velocity and velocity.Magnitude > Config.Fling.AntiVelocityThreshold then
-            -- Yeni API'yi dene
-            if hrp.AssemblyLinearVelocity then
-                hrp.AssemblyLinearVelocity = Vector3.new(0,0,0)
-                hrp.AssemblyAngularVelocity = Vector3.new(0,0,0)
-            else
-                -- Eski API'yi dene
-                hrp.Velocity = Vector3.new(0,0,0)
-                hrp.RotVelocity = Vector3.new(0,0,0)
-            end
+        local velocity = hrp.AssemblyLinearVelocity or Vector3.new(0, 0, 0)
+        if velocity.Magnitude > Config.Fling.AntiVelocityThreshold then
+            hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+            hrp.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
         end
     end
 end
 
 local function flingPlayerByName()
     if not state.flingActive or state.flingPlayerName == "" then return end
-    local targetPlayer = Players:FindFirstChild(state.flingPlayerName)
-    if targetPlayer and targetPlayer.Character then
-        local targetHRP = targetPlayer.Character:FindFirstChild("HumanoidRootPart")
-        if targetHRP then
-            local direction = (targetHRP.CFrame.LookVector * Config.Fling.FlingDirection)
-            -- Yeni API'yi dene
-            if targetHRP.AssemblyLinearVelocity then
-                targetHRP.AssemblyLinearVelocity = Config.Fling.FlingForce + direction
-            else
-                -- Eski API'yi dene
-                targetHRP.Velocity = Config.Fling.FlingForce + direction
-            end
-        end
+    if tick() - state.lastFlingTime < Config.Fling.FlingCooldown then return end
+
+    local targetPlayer = findPlayerByName(state.flingPlayerName)
+    if not targetPlayer then
+        warn("Hedef oyuncu bulunamadı: " .. state.flingPlayerName)
+        return
     end
+
+    if not targetPlayer.Character then
+        warn("Hedef oyuncunun karakteri yüklenmedi: " .. targetPlayer.Name)
+        return
+    end
+
+    local targetHRP = getHumanoidRootPart(targetPlayer.Character)
+    if not targetHRP then
+        warn("Hedef oyuncunun HumanoidRootPart'ı bulunamadı: " .. targetPlayer.Name)
+        return
+    end
+
+    -- Attempt to set network ownership
+    local success, err = pcall(function()
+        if targetHRP:GetNetworkOwner() ~= localPlayer then
+            targetHRP:SetNetworkOwner(localPlayer)
+        end
+    end)
+
+    if not success then
+        warn("Network ownership ayarlanamadı: " .. tostring(err))
+    end
+
+    -- Calculate fling direction and force
+    local direction = (targetHRP.CFrame.LookVector * Config.Fling.FlingDirection)
+    local flingForce = Config.Fling.FlingForce + direction
+
+    -- Apply fling force using a temporary BodyVelocity
+    local bodyVelocity = Instance.new("BodyVelocity")
+    bodyVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    bodyVelocity.Velocity = flingForce
+    bodyVelocity.Parent = targetHRP
+
+    -- Remove BodyVelocity after duration
+    spawn(function()
+        task_wait(Config.Fling.FlingDuration)
+        if bodyVelocity and bodyVelocity.Parent then
+            bodyVelocity:Destroy()
+        end
+    end)
+
+    state.lastFlingTime = tick()
+    warn("Oyuncu fling edildi: " .. targetPlayer.Name)
+end
+
+local function flingUpdateLoop()
+    if flingConnection then
+        flingConnection:Disconnect()
+        flingConnection = nil
+    end
+    flingConnection = RunService.Stepped:Connect(function()
+        antiFling()
+        flingPlayerByName()
+    end)
 end
 
 -- === Hareket Fonksiyonları ===
@@ -421,7 +521,7 @@ local function toggleNoclip(enabled)
             
             noclipConnection = RunService.RenderStepped:Connect(function()
                 if hrp and noclipBodyVelocity then
-                    noclipBodyVelocity.Velocity = hrp.Velocity -- Mevcut hızı koru
+                    noclipBodyVelocity.Velocity = hrp.Velocity
                 end
             end)
         end
@@ -473,7 +573,6 @@ local function updateESPComponents(plr, hrp, role, roleColor, hum)
     local data = espData[plr]
     if not data then return end
     
-    -- Box ESP
     if state.espActive then
         if not data.box then
             data.box = Instance.new("BoxHandleAdornment", camera)
@@ -489,7 +588,6 @@ local function updateESPComponents(plr, hrp, role, roleColor, hum)
         data.box.Visible = false
     end
 
-    -- Nametag ESP
     local nametag, nameLabel = createOrUpdateBillboard(data, "nametag", espScreenGui, {
         instance = { Size = UDim2.new(0, 140, 0, 30), StudsOffset = Vector3.new(0, 3.5, 0), AlwaysOnTop = true },
         label = { Size = UDim2.new(1,0,1,0), BackgroundTransparency = 1, TextStrokeTransparency = 0.5, Font = Enum.Font.GothamSemibold }
@@ -502,7 +600,6 @@ local function updateESPComponents(plr, hrp, role, roleColor, hum)
         nameLabel.TextSize = Config.ESP.NametagFontSize
     end
     
-    -- Distance ESP
     local distance, distLabel = createOrUpdateBillboard(data, "distance", espScreenGui, {
         instance = { Size = UDim2.new(0, 100, 0, 20), StudsOffset = Vector3.new(0, -2, 0), AlwaysOnTop = true },
         label = { Size = UDim2.new(1,0,1,0), BackgroundTransparency = 1, TextColor3 = Color3.fromRGB(255,255,255), TextStrokeTransparency = 0.5, Font = Enum.Font.Gotham }
@@ -515,7 +612,6 @@ local function updateESPComponents(plr, hrp, role, roleColor, hum)
         distLabel.TextSize = Config.ESP.DistanceFontSize
     end
     
-    -- Health Bar ESP
     if Config.ESP.HealthBarEnabled and hum then
         local healthBar, healthLabel = createOrUpdateBillboard(data, "healthbar", espScreenGui, {
             instance = { Size = UDim2.new(0, 80, 0, 15), StudsOffset = Vector3.new(0, -3.5, 0), AlwaysOnTop = true },
@@ -538,14 +634,12 @@ local function updateESPComponents(plr, hrp, role, roleColor, hum)
     end
 end
 
--- Chams (Highlight) sistemi
 local function updateChams(plr, char, roleColor)
     local data = espData[plr]
     if not data then return end
 
     if state.chamsActive then
         if not data.highlight then
-            -- Highlight'ı camera yerine char'a parent yap
             data.highlight = Instance.new("Highlight")
             data.highlight.Parent = char
         end
@@ -561,7 +655,6 @@ local function updateChams(plr, char, roleColor)
     end
 end
 
--- Tracers sistemi
 local function updateTracer(plr, hrp, roleColor)
     local data = espData[plr]
     if not data then return end
@@ -591,7 +684,6 @@ local function updateTracer(plr, hrp, roleColor)
     end
 end
 
--- Ana ESP güncelleme fonksiyonu
 local function updatePlayerESP(plr)
     local char = plr.Character
     if plr == localPlayer or not char then clearESP(plr); return end
@@ -712,7 +804,7 @@ local function smartShootMurder(shoot_delay)
     end
     
     local char, hrp, gun = localPlayer.Character, getHumanoidRootPart(localPlayer.Character), 
-                                   localPlayer.Character:FindFirstChild("Gun", true) or localPlayer.Backpack:FindFirstChild("Gun")
+                           localPlayer.Character:FindFirstChild("Gun", true) or localPlayer.Backpack:FindFirstChild("Gun")
     
     if not (char and hrp and gun and camera) then 
         warn("[Şerif Atışı] Gerekli bileşenler bulunamadı."); 
@@ -741,7 +833,7 @@ local function smartShootMurder(shoot_delay)
         return 
     end
     
-    local velocity = aimTarget.Velocity or Vector3.new()
+    local velocity = aimTarget.AssemblyLinearVelocity or Vector3.new()
     local pingValue = Stats.Network.ServerStatsItem["Data Ping"]:GetValue() / 1000
     local distance = (hrp.Position - aimTarget.Position).Magnitude
     
@@ -775,8 +867,8 @@ local function smartShootMurder(shoot_delay)
                 remoteEventToUse:FireServer("Fire", predictedPosition, targetMurderer.Name) 
             end)
             if success then
-                 currentKills = currentKills + 1
-                 updateStats()
+                currentKills = currentKills + 1
+                updateStats()
             else
                 warn("[Remote Hata] '" .. remoteEventToUse.Name .. "': " .. tostring(err)) 
                 cachedShootRemote.remote = nil
@@ -793,19 +885,16 @@ end
 
 -- === GUI Sistemi ===
 local function createGUI()
-    -- Ana ScreenGui
     screenGui = Instance.new("ScreenGui")
     screenGui.Name = "UltraMM2GUI"
     screenGui.Parent = localPlayer:WaitForChild("PlayerGui")
     screenGui.ResetOnSpawn = false
     
-    -- ESP için ayrı ScreenGui
     espScreenGui = Instance.new("ScreenGui")
     espScreenGui.Name = "UltraMM2ESP"
     espScreenGui.Parent = localPlayer:WaitForChild("PlayerGui")
     espScreenGui.ResetOnSpawn = false
     
-    -- Ana Frame
     mainFrame = Instance.new("Frame")
     mainFrame.Name = "MainFrame"
     mainFrame.Size = UDim2.new(0, 400, 0, 600)
@@ -816,19 +905,17 @@ local function createGUI()
     mainFrame.Draggable = true
     mainFrame.Parent = screenGui
     
-    -- Ana Frame köşe yuvarlatma
     local mainCorner = Instance.new("UICorner")
     mainCorner.CornerRadius = UDim.new(0, 10)
     mainCorner.Parent = mainFrame
     
-    -- Başlık
     local titleLabel = Instance.new("TextLabel")
     titleLabel.Name = "TitleLabel"
     titleLabel.Size = UDim2.new(1, 0, 0, 40)
     titleLabel.Position = UDim2.new(0, 0, 0, 0)
     titleLabel.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
     titleLabel.BorderSizePixel = 0
-    titleLabel.Text = "Ultra MM2 GUI V22.0"
+    titleLabel.Text = "Ultra MM2 GUI V22.1"
     titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
     titleLabel.TextSize = 18
     titleLabel.Font = Enum.Font.GothamBold
@@ -838,7 +925,6 @@ local function createGUI()
     titleCorner.CornerRadius = UDim.new(0, 10)
     titleCorner.Parent = titleLabel
     
-    -- Kapatma butonu
     local closeButton = Instance.new("TextButton")
     closeButton.Name = "CloseButton"
     closeButton.Size = UDim2.new(0, 30, 0, 30)
@@ -859,7 +945,6 @@ local function createGUI()
         screenGui:Destroy()
     end)
     
-    -- ScrollingFrame
     local scrollFrame = Instance.new("ScrollingFrame")
     scrollFrame.Name = "ScrollFrame"
     scrollFrame.Size = UDim2.new(1, -20, 1, -60)
@@ -871,13 +956,11 @@ local function createGUI()
     scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 1200)
     scrollFrame.Parent = mainFrame
     
-    -- UIListLayout
     local listLayout = Instance.new("UIListLayout")
     listLayout.SortOrder = Enum.SortOrder.LayoutOrder
     listLayout.Padding = UDim.new(0, 5)
     listLayout.Parent = scrollFrame
     
-    -- Yardımcı fonksiyon: Buton oluşturma
     local function createButton(name, text, callback, parent)
         local button = Instance.new("TextButton")
         button.Name = name
@@ -898,7 +981,6 @@ local function createGUI()
         return button
     end
     
-    -- Yardımcı fonksiyon: Toggle oluşturma
     local function createToggle(name, text, stateKey, callback, parent)
         local frame = Instance.new("Frame")
         frame.Name = name .. "Frame"
@@ -949,7 +1031,6 @@ local function createGUI()
         return toggle
     end
     
-    -- Yardımcı fonksiyon: TextBox oluşturma
     local function createTextBox(name, placeholderText, defaultValue, callback, parent)
         local textBox = Instance.new("TextBox")
         textBox.Name = name
@@ -977,9 +1058,6 @@ local function createGUI()
         return textBox
     end
     
-    -- === GUI Elemanları ===
-    
-    -- İstatistikler
     statsLabel = Instance.new("TextLabel")
     statsLabel.Name = "StatsLabel"
     statsLabel.Size = UDim2.new(1, 0, 0, 35)
@@ -995,7 +1073,6 @@ local function createGUI()
     statsCorner.CornerRadius = UDim.new(0, 5)
     statsCorner.Parent = statsLabel
 
-    -- FPS Label
     fpsLabel = Instance.new("TextLabel")
     fpsLabel.Name = "FPSLabel"
     fpsLabel.Size = UDim2.new(1, 0, 0, 35)
@@ -1010,7 +1087,6 @@ local function createGUI()
     fpsCorner.CornerRadius = UDim.new(0, 5)
     fpsCorner.Parent = fpsLabel
     
-    -- ESP Bölümü
     local espSection = Instance.new("TextLabel")
     espSection.Size = UDim2.new(1, 0, 0, 30)
     espSection.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
@@ -1032,7 +1108,6 @@ local function createGUI()
     createToggle("GunESPToggle", "Silah ESP", "gunESPActive")
     createToggle("CrosshairToggle", "Crosshair", "crosshairActive")
     
-    -- Combat Bölümü
     local combatSection = Instance.new("TextLabel")
     combatSection.Size = UDim2.new(1, 0, 0, 30)
     combatSection.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
@@ -1059,7 +1134,6 @@ local function createGUI()
     createToggle("AutoShootToggle", "Otomatik Atış", "autoShootActive")
     createToggle("AutoKnifeThrowToggle", "Otomatik Bıçak Atma", "autoKnifeThrowActive")
     
-    -- Fling Bölümü
     local flingSection = Instance.new("TextLabel")
     flingSection.Size = UDim2.new(1, 0, 0, 30)
     flingSection.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
@@ -1079,11 +1153,22 @@ local function createGUI()
     flingPlayerTextBox = createTextBox("FlingPlayerTextBox", "Fling yapılacak oyuncu adı...", state.flingPlayerName, function(text)
         state.flingPlayerName = text
         saveSettings()
+        warn("Fling hedefi ayarlandı: " .. text)
     end)
     
-    createToggle("FlingToggle", "💥 Fling Aktif", "flingActive")
+    createToggle("FlingToggle", "💥 Fling Aktif", "flingActive", function(enabled)
+        if enabled and state.flingPlayerName == "" then
+            warn("Lütfen önce bir oyuncu adı girin!")
+            state.flingActive = false
+            local toggle = scrollFrame:FindFirstChild("FlingToggle")
+            if toggle then
+                toggle.BackgroundColor3 = Color3.fromRGB(255, 60, 60)
+                toggle.Text = "OFF"
+            end
+        end
+        saveSettings()
+    end)
     
-    -- Hareket Bölümü
     local movementSection = Instance.new("TextLabel")
     movementSection.Size = UDim2.new(1, 0, 0, 30)
     movementSection.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
@@ -1140,7 +1225,6 @@ local function createGUI()
         toggleAntiRagdoll(enabled)
     end)
     
-    -- Otomatik Bölümü
     local autoSection = Instance.new("TextLabel")
     autoSection.Size = UDim2.new(1, 0, 0, 30)
     autoSection.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
@@ -1159,7 +1243,6 @@ local function createGUI()
     createToggle("AutoCoinToggle", "Otomatik Coin Toplama", "autoCoinActive")
     createToggle("AntiAFKToggle", "Anti-AFK", "antiAFKActive")
     
-    -- Teleport Bölümü
     local teleportSection = Instance.new("TextLabel")
     teleportSection.Size = UDim2.new(1, 0, 0, 30)
     teleportSection.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
@@ -1183,7 +1266,6 @@ local function createGUI()
         end)
     end
     
-    -- Ayarlar butonu
     createButton("SaveSettingsButton", "💾 Ayarları Kaydet", function()
         saveSettings()
         warn("Ayarlar kaydedildi!")
@@ -1191,7 +1273,6 @@ local function createGUI()
     
     createButton("LoadSettingsButton", "📁 Ayarları Yükle", function()
         loadSettings()
-        -- GUI elementlerini yüklenen ayarlara göre güncellemek için manuel tetikleme
         setSpeed(state.speedActive)
         toggleInfJump(state.infJumpActive)
         toggleNoclip(state.noclipActive)
@@ -1200,28 +1281,11 @@ local function createGUI()
         if localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Humanoid") then
             localPlayer.Character:FindFirstChildOfClass("Humanoid").JumpPower = state.jumpPowerValue
         end
-
-        -- GUI toggle'larını manuel olarak güncelle (yüklenen ayarları göstermesi için)
-        -- Bu kısmı createGUI'nin içindeki toggle oluşturma mantığına uygun olarak ekleyebilirsiniz.
-        -- Şimdilik, script yeniden yüklendiğinde ayarların uygulanması yeterli olacaktır.
-        -- Ancak tam bir GUI senkronizasyonu için, toggle'ların ve textbox'ların değerleri manuel olarak ayarlanmalı.
-        -- Örneğin:
-        -- if mainFrame:FindFirstChild("ScrollFrame"):FindFirstChild("SpeedToggle") then
-        --     local toggle = mainFrame:FindFirstChild("ScrollFrame"):FindFirstChild("SpeedToggle")
-        --     toggle.BackgroundColor3 = state.speedActive and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 60, 60)
-        --     toggle.Text = state.speedActive and "ON" or "OFF"
-        -- end
-        -- if mainFrame:FindFirstChild("ScrollFrame"):FindFirstChild("SpeedValueTextBox") then
-        --     mainFrame:FindFirstChild("ScrollFrame"):FindFirstChild("SpeedValueTextBox").Text = tostring(state.speedValue)
-        -- end
-        
         warn("Ayarlar yüklendi!")
     end)
 end
 
 -- === Ana Döngüler ve Olay İşleyiciler ===
-
--- ESP güncelleme döngüsü
 local function espUpdateLoop()
     spawn(function()
         while true do
@@ -1236,7 +1300,6 @@ local function espUpdateLoop()
     end)
 end
 
--- Tracer güncelleme döngüsü (RenderStepped)
 local function tracerUpdateLoop()
     RunService.RenderStepped:Connect(function()
         if state.tracersActive then
@@ -1254,18 +1317,9 @@ local function tracerUpdateLoop()
     end)
 end
 
--- Anti-Fling ve Fling döngüsü
-local function flingUpdateLoop()
-    RunService.Stepped:Connect(function()
-        antiFling()
-        flingPlayerByName()
-    end)
-end
-
--- Oyuncu olayları
 Players.PlayerAdded:Connect(function(plr)
     plr.CharacterAdded:Connect(function()
-        task_wait(1) -- Karakterin tam yüklenmesini bekle
+        task_wait(1)
         updatePlayerESP(plr)
     end)
 end)
@@ -1274,7 +1328,6 @@ Players.PlayerRemoving:Connect(function(plr)
     clearESP(plr)
 end)
 
--- Mevcut oyuncular için
 for _, plr in ipairs(Players:GetPlayers()) do
     if plr.Character then
         updatePlayerESP(plr)
@@ -1285,7 +1338,6 @@ for _, plr in ipairs(Players:GetPlayers()) do
     end)
 end
 
--- Item ESP güncelleme
 Workspace.ChildAdded:Connect(function(child)
     if state.gunESPActive then
         task_wait(0.1)
@@ -1302,7 +1354,6 @@ Workspace.ChildRemoved:Connect(function(child)
     end
 end)
 
--- Keybind işleyicisi
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
     
@@ -1327,55 +1378,6 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
                 saveSettings()
             end
         end
-    end
-end)
-
--- === Başlatma ===
-loadSettings()
-createGUI()
-espUpdateLoop()
-tracerUpdateLoop()
-flingUpdateLoop()
-updateStats()
-
--- Yüklenen ayarlara göre hareket özelliklerini başlangıçta etkinleştir
-if state.speedActive then setSpeed(true) end
-if state.infJumpActive then toggleInfJump(true) end
-if state.noclipActive then toggleNoclip(true) end
-if state.antiRagdollActive then toggleAntiRagdoll(true) end
-
--- Karakterin her yeniden doğuşunda hareket özelliklerini yeniden uygula
-localPlayer.CharacterAdded:Connect(function(char)
-    task_wait(0.5) -- Karakterin tamamen yüklenmesi için kısa bir bekleme
-    if state.speedActive then setSpeed(true) end
-    if state.infJumpActive then toggleInfJump(true) end
-    if state.noclipActive then toggleNoclip(true) end
-    if state.antiRagdollActive then toggleAntiRagdoll(true) end
-    
-    -- Zıplama gücünü de karakter doğduğunda ayarla
-    char:WaitForChild("Humanoid").JumpPower = state.jumpPowerValue
-end)
-
-
--- FPS göstergesi
-spawn(function()
-    local lastTime = tick()
-    local frameCount = 0
-    
-    while true do
-        frameCount = frameCount + 1
-        local currentTime = tick()
-        
-        if currentTime - lastTime >= 1 then
-            local fps = math_floor(frameCount / (currentTime - lastTime))
-            if fpsLabel then
-                fpsLabel.Text = "FPS: " .. fps
-            end
-            frameCount = 0
-            lastTime = currentTime
-        end
-        
-        RunService.Heartbeat:Wait()
     end
 end)
 
@@ -1408,7 +1410,7 @@ local function notifyUser(message, duration)
     messageLabel.Parent = notificationFrame
 
     notificationFrame.Transparency = 0
-    messageLabel.TextTransparency = 0 -- TextLabel'ın metin saydamlığını da ayarla
+    messageLabel.TextTransparency = 0
 
     local tweenInfo = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
     local fadeInTween = TweenService:Create(notificationFrame, tweenInfo, {Transparency = 0})
@@ -1421,7 +1423,6 @@ local function notifyUser(message, duration)
     notificationGui:Destroy()
 end
 
--- warn fonksiyonunu override et
 local originalWarn = warn
 warn = function(...)
     originalWarn(...)
@@ -1429,7 +1430,50 @@ warn = function(...)
     notifyUser(message, 5)
 end
 
-warn("Ultra MM2 GUI V22.0 başarıyla yüklendi!")
+-- === Başlatma ===
+loadSettings()
+createGUI()
+espUpdateLoop()
+tracerUpdateLoop()
+flingUpdateLoop()
+updateStats()
+
+if state.speedActive then setSpeed(true) end
+if state.infJumpActive then toggleInfJump(true) end
+if state.noclipActive then toggleNoclip(true) end
+if state.antiRagdollActive then toggleAntiRagdoll(true) end
+
+localPlayer.CharacterAdded:Connect(function(char)
+    task_wait(0.5)
+    if state.speedActive then setSpeed(true) end
+    if state.infJumpActive then toggleInfJump(true) end
+    if state.noclipActive then toggleNoclip(true) end
+    if state.antiRagdollActive then toggleAntiRagdoll(true) end
+    char:WaitForChild("Humanoid").JumpPower = state.jumpPowerValue
+end)
+
+spawn(function()
+    local lastTime = tick()
+    local frameCount = 0
+    
+    while true do
+        frameCount = frameCount + 1
+        local currentTime = tick()
+        
+        if currentTime - lastTime >= 1 then
+            local fps = math_floor(frameCount / (currentTime - lastTime))
+            if fpsLabel then
+                fpsLabel.Text = "FPS: " .. fps
+            end
+            frameCount = 0
+            lastTime = currentTime
+        end
+        
+        RunService.Heartbeat:Wait()
+    end
+end)
+
+warn("Ultra MM2 GUI V22.1 başarıyla yüklendi!")
 warn("Keybinds:")
 warn("F4 - GUI Aç/Kapat")
 warn("F5 - Manuel Atış")
